@@ -60,7 +60,18 @@ import Combine
         let modeName = switch mode { case .rule: "规则模式"; case .global: "全局模式"; case .direct: "直连模式" }
         return (takeover.isEmpty ? "内核运行中" : takeover.joined(separator: " + ")) + " · " + modeName + (activeTrialMode ? " · 限时验收中" : "")
     }
-    var policies: [String] { ["PROXY", "DIRECT", "REJECT"] + library.nodes.map(\.name) }
+    /// Policies a rule or the fallback may use: built-ins, each active subscription's group, and active nodes.
+    var policies: [String] {
+        let active = Set(library.subscriptions.filter(\.enabled).map(\.id))
+        let nodes = library.nodes.filter { $0.sourceID.map(active.contains) ?? true }
+        let groups = library.subscriptions.filter { subscription in active.contains(subscription.id) && nodes.contains { $0.sourceID == subscription.id } }
+        return ["PROXY", "DIRECT", "REJECT"] + groups.map { ConfigurationBuilder.sourcePolicy($0.id) } + nodes.map(\.name)
+    }
+    /// Human-readable name for a policy; subscription groups are shown by subscription name.
+    func policyLabel(_ policy: String) -> String {
+        if let subscription = library.subscriptions.first(where: { ConfigurationBuilder.sourcePolicy($0.id) == policy }) { return "订阅：" + subscription.name }
+        return policy
+    }
 
     init() {
         libraryObservation = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }

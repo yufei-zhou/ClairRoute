@@ -156,7 +156,7 @@ public enum SafeYAML {
                     if q == "\"", c == "\\" { escaped = true; continue }
                     if c == q { quote = nil }; continue
                 }
-                if c == "\"" || c == "'" { quote = c }
+                if Self.opensQuote(text, index) { quote = c }
                 else if c == "[" || c == "{" { nesting += 1 }
                 else if c == "]" || c == "}" { nesting -= 1 }
                 else if c == ":", nesting == 0 {
@@ -175,20 +175,30 @@ public enum SafeYAML {
                     if q == "\"", c == "\\" { escaped = true; continue }
                     if c == q { quote = nil }; continue
                 }
-                if c == "\"" || c == "'" { quote = c }
+                if Self.opensQuote(text, index) { quote = c }
                 if c == "#", index == text.startIndex || text[text.index(before: index)].isWhitespace { return String(text[..<index]) }
             }
             return text
         }
+        /// A quote only starts a quoted scalar at the beginning of a token, so the
+        /// apostrophe in a plain value such as `Bob's HK` is ordinary text.
+        static func opensQuote(_ text: String, _ index: String.Index) -> Bool {
+            let c = text[index]
+            guard c == "\"" || c == "'" else { return false }
+            guard index != text.startIndex else { return true }
+            let previous = text[text.index(before: index)]
+            return previous.isWhitespace || "[{,:-".contains(previous) || previous == c
+        }
         static func flowBalance(_ text: String) -> Int {
             var quote: Character?; var escaped = false; var balance = 0
-            for c in text {
+            for index in text.indices {
+                let c = text[index]
                 if let q = quote {
                     if escaped { escaped = false; continue }
                     if q == "\"", c == "\\" { escaped = true; continue }
                     if c == q { quote = nil }; continue
                 }
-                if c == "\"" || c == "'" { quote = c }
+                if Self.opensQuote(text, index) { quote = c }
                 else if c == "[" || c == "{" { balance += 1 }
                 else if c == "]" || c == "}" { balance -= 1 }
             }

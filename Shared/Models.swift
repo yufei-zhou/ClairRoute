@@ -63,6 +63,26 @@ public struct AdvancedOptions: Codable, Sendable, Equatable {
     public var logLevel = "warning"
     public var tcpConcurrent = false
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case dnsServers, proxyDNS, fakeIPFilter, ipv6, tunStack, mtu, logLevel, tcpConcurrent
+    }
+}
+
+public extension AdvancedOptions {
+    /// Missing keys keep their defaults so that new options never break stored profiles.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        dnsServers = try c.decodeIfPresent([String].self, forKey: .dnsServers) ?? dnsServers
+        proxyDNS = try c.decodeIfPresent([String].self, forKey: .proxyDNS) ?? proxyDNS
+        fakeIPFilter = try c.decodeIfPresent([String].self, forKey: .fakeIPFilter) ?? fakeIPFilter
+        ipv6 = try c.decodeIfPresent(Bool.self, forKey: .ipv6) ?? ipv6
+        tunStack = try c.decodeIfPresent(String.self, forKey: .tunStack) ?? tunStack
+        mtu = try c.decodeIfPresent(Int.self, forKey: .mtu) ?? mtu
+        logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? logLevel
+        tcpConcurrent = try c.decodeIfPresent(Bool.self, forKey: .tcpConcurrent) ?? tcpConcurrent
+    }
 }
 
 /// Runtime-only credentials. Persist node metadata separately and passwords in Keychain.
