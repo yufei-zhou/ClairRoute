@@ -1,0 +1,42 @@
+{
+  "allow-lan": false,
+  "bind-address": "127.0.0.1",
+  "dns": {
+    "default-nameserver": ["1.1.1.1", "9.9.9.9"],
+    "enable": true,
+    "enhanced-mode": "fake-ip",
+    "fake-ip-filter": ["*.lan", "*.local", "localhost"],
+    "fake-ip-range": "198.18.0.1/16",
+    "ipv6": true,
+    "listen": "127.0.0.1:53",
+    "nameserver": ["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"],
+    "proxy-server-nameserver": ["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"]
+  },
+  "etag-support": false,
+  "external-controller-unix": "/var/run/clairroute/controller.sock",
+  "find-process-mode": "strict",
+  "geo-auto-update": false,
+  "geodata-mode": true,
+  "geox-url": {"asn": "", "geoip": "", "geosite": "", "mmdb": ""},
+  "ipv6": true,
+  "log-level": "warning",
+  "mixed-port": 17890,
+  "mode": "rule",
+  "profile": {"store-fake-ip": false, "store-selected": false},
+  "proxies": [],
+  "proxy-groups": [
+    {"default-selected": "NODE_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "filter": "^NODE_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee$", "name": "Golden SS", "type": "select", "use": ["provider-11111111-2222-3333-4444-555555555555"]},
+    {"name": "SUB_11111111-2222-3333-4444-555555555555", "type": "select", "use": ["provider-11111111-2222-3333-4444-555555555555"]},
+    {"default-selected": "Golden SS", "name": "PROXY", "proxies": ["Golden SS"], "type": "select"},
+    {"default-selected": "PROXY", "name": "GLOBAL", "proxies": ["PROXY"], "type": "select"}
+  ],
+  "proxy-providers": {
+    "provider-11111111-2222-3333-4444-555555555555": {
+      "payload": [{"cipher": "aes-256-gcm", "name": "NODE_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "password": "test-only-password", "port": 443, "server": "example.test", "type": "ss", "udp": true}],
+      "type": "inline"
+    }
+  },
+  "rules": ["PROCESS-PATH-REGEX,^/Applications/ChatGPT\\.app/,PROXY", "DOMAIN-SUFFIX,example.test,Golden SS", "MATCH,DIRECT"],
+  "tcp-concurrent": false,
+  "tun": {"auto-detect-interface": true, "auto-route": true, "device": "utun197", "dns-hijack": ["any:53", "tcp://any:53"], "enable": true, "mtu": 1500, "stack": "mixed"}
+}
