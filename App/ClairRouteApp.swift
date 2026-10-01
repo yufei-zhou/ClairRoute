@@ -15,7 +15,7 @@ private struct MainWindowContent: View {
     let delegate: AppDelegate
     @Environment(\.openWindow) private var openWindow
     var body: some View {
-        SettingsView(model: model, library: model.library)
+        MainView(model: model, library: model.library)
             .onAppear {
                 delegate.model = model
                 // Retain the scene action so Spotlight can reopen a closed window.

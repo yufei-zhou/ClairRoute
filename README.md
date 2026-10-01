@@ -1,20 +1,60 @@
 # ClairRoute
 
-Apple Silicon 上的原生 macOS 代理客户端，最低 macOS 26，目标 macOS 27。Swift 6 + SwiftUI，内核固定为官方 mihomo v1.19.31。无遥测、广告、机场推荐或在线转换服务。
+一个原生的 macOS 代理客户端，内核使用官方 [mihomo](https://github.com/MetaCubeX/mihomo)。
 
-通过 Spotlight 搜索 ClairRoute 打开窗口，不显示 Dock 图标或菜单栏常驻图标。关闭窗口后应用继续在后台运行；从 Spotlight 再次打开可恢复窗口。在“高级与维护”点击“退出 ClairRoute”会先恢复网络再退出。
+ClairRoute 用 Swift 6 和 SwiftUI 编写，界面简洁，默认只让你指定的 App 走代理，其余流量保持直连。它把“出问题时能把网络恢复原样”当作第一优先级：不管是界面被强制退出、电脑睡眠唤醒，还是切换 Wi-Fi，后台服务都会把它改过的 DNS 和代理设置还原回去。
 
-## 功能
+没有遥测，没有广告，不推荐机场，也不调用任何在线订阅转换服务。
 
-- **增强模式与系统代理分别开关**：TUN 覆盖 TCP / UDP；系统代理设置 HTTP / HTTPS / SOCKS。出站可选规则、全局、直连。
-- **节点和订阅**：SS AEAD / SS2022、VMess、VLESS Reality（含 `xtls-rprx-vision`），支持 TCP / WebSocket / gRPC 适用组合。手动表单、URI / Base64 列表、本地 YAML 导入、HTTPS YAML 订阅、刷新间隔、流量和到期时间、节点选择与延迟测试。
-- **规则编辑**：正在运行的 App、选择 `.app`、bundle 可执行文件列表、进程名、DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE。拖拽或按钮排序，策略可选 PROXY、具体节点、DIRECT、REJECT；MATCH 兜底可选。
-- **连接面板**：每 2 秒读取真实快照，显示进程、目标、命中规则、出站链和流量；选中或右键快捷添加规则。当前最多显示 200 条，无法识别进程时明确显示“未识别”。
-- **高级 YAML**：语法高亮和安全白名单校验；可设置 DNS、IPv6、TUN stack / MTU 等。管理接口、权限、文件路径和命令不可覆盖。
-- **恢复**：GUI watchdog、持久恢复记录、配置失败回滚、睡眠 / 网络变化处理，以及独立进程执行的 120 秒限时网络验收。
-- **卸载**：应用内“完全卸载”先恢复网络并清除配置；若仍有旧版钥匙串条目，完成清理后再退出，并在终端请求管理员授权移除系统组件。
+> [!NOTE]
+> 目前只支持 **Apple Silicon + macOS 26 或更新版本**，需要在本机用 Xcode 构建安装，暂不提供可直接下载的安装包。
 
-初次安装网络开关均关闭。默认规则为：
+## 功能一览
+
+- **两种接管方式，分别开关**：增强模式（TUN）在网络层接管所有 TCP / UDP；系统代理只影响遵循 macOS 代理设置的应用。
+- **三种出站模式**：规则、全局、直连。
+- **节点与订阅**：支持 Shadowsocks（含 SS2022）、VMess、VLESS（含 Reality 和 `xtls-rprx-vision`），传输支持 TCP / WebSocket / gRPC。可以手动填写、粘贴分享链接、导入 Clash / mihomo YAML，或者添加 HTTPS 订阅并定时刷新，还能看到流量用量和到期时间。
+- **按 App 分流**：直接从正在运行的 App 里选，或选择一个 `.app`，也支持进程名、域名、域名后缀、关键词和 GEOSITE 分类。规则可拖动排序。
+- **连接面板**：实时查看每条连接来自哪个进程、访问了哪里、命中了哪条规则、走了哪个节点，右键就能为它加规则。
+- **安全的高级设置**：可以改 DNS、IPv6、TUN 协议栈和 MTU 等，但无法改动监听端口、控制接口或文件路径。
+- **自动恢复网络**：界面退出或崩溃、心跳超时、睡眠唤醒、网络切换时都会检查并在必要时恢复原有设置。首次使用还可以做 120 秒限时验收，到期自动回滚。
+
+## 安装
+
+你需要：
+
+- 一台 Apple Silicon Mac，系统为 macOS 26 或更新版本
+- 完整安装的 Xcode（不是只有命令行工具），并在 Xcode 设置 › Locations 里选中它
+- 管理员密码（安装后台服务时需要）
+
+不需要付费的 Apple 开发者账号。
+
+```bash
+git clone https://github.com/yufei-zhou/ClairRoute.git
+cd ClairRoute
+bash 'Scripts/Install ClairRoute.command'
+```
+
+也可以在 Finder 里双击 `Scripts/Install ClairRoute.command`。安装器会依次：
+
+1. 下载固定版本的官方 mihomo 内核并校验 SHA256（只下载，不执行）；
+2. 在你的登录钥匙串里创建（或复用）一个仅用于本机代码签名的证书；
+3. 编译并签名 App、Helper 和 RecoveryGuard；
+4. 在终端里请求管理员密码，把 App 装到 `/Applications`，并注册两个空闲的后台服务。
+
+安装完成后网络开关都是关着的，不会自动开始代理。如果想分步执行或了解每一步做了什么，见 [从源码构建](#从源码构建)。
+
+## 快速上手
+
+1. **打开 App**：用 Spotlight 搜索 “ClairRoute”。它不在 Dock 和菜单栏显示图标；关闭窗口后仍在后台运行，再从 Spotlight 打开即可回到窗口。
+2. **添加节点**：在“节点与订阅”里手动添加、导入分享链接或 YAML，或者添加订阅后点“刷新”。
+3. **选择节点**：在节点列表里点“使用”。
+4. **先做一次限时验收（推荐）**：在“概览”点“开始 120 秒 TUN 验收”，确认网络正常；120 秒后会自动还原。
+5. **正式开启**：在“概览”打开“增强模式（TUN）”，出站模式选“规则”。
+
+### 默认只有 ChatGPT 走代理
+
+全新安装时只有一条规则：
 
 ```yaml
 rules:
@@ -22,131 +62,121 @@ rules:
   - 'MATCH,DIRECT'
 ```
 
-它覆盖当前新版 ChatGPT bundle 内的辅助进程。其他 App、ChatGPT Classic 和无法归属到该路径的连接走 DIRECT。配置编辑后点击“应用配置”才改变运行会话；订阅自动刷新只更新本地资料库。默认规则下终端 curl 本应直连；验证全局接管时主动选“全局”。“直连”是出站模式，停止接管请关闭增强模式。
+也就是说，只有 `/Applications/ChatGPT.app` 里的进程走代理，其他所有流量都直连。想让更多 App 或网站走代理，到“规则”页添加，或者把“其余流量”改成 `PROXY`。
 
-日常仅让 ChatGPT 走代理时，使用“增强模式开启、系统代理关闭、规则模式”。TUN 在网络层接管 TCP/UDP 后按规则分流；系统代理只对遵循 macOS HTTP/HTTPS/SOCKS 设置的应用生效，一般无需与 TUN 同时开启。
+修改节点、规则或高级设置后，点右上角的“应用配置”才会作用到正在运行的会话；订阅自动刷新只会更新节点列表，不会悄悄改变正在运行的代理。
 
-## 构建与本机安装
+## 常见问题
 
-完整 Xcode 提供 Swift 编译器与 macOS SDK。无需额外 Swift 包，不需要付费开发者账号。
+**增强模式和系统代理要一起开吗？**
+一般不用。日常推荐“增强模式开、系统代理关、规则模式”。增强模式已经在网络层接管了所有流量；系统代理只对浏览器等遵循系统代理设置的应用生效，适合不想创建 TUN 的场景。
 
-```bash
-# 首次克隆后下载并校验固定版本内核。仅下载，不执行。
-bash Scripts/fetch-core.sh
+**“直连”模式和关闭开关有什么区别？**
+“直连”只是把出站策略设为全部直连，接管仍在进行。想彻底停止，请关闭两个开关，或点“恢复网络并关闭代理”。
 
-# 在项目目录执行。仅编译，不启动应用、内核或服务。
-python3 Scripts/build-native.py
-```
+**能和 ClashX、Surge 等其他代理客户端同时用吗？**
+不要同时开启两个客户端的增强模式。ClairRoute 检测到其他 VPN 或隧道占用默认路由时会拒绝启动 TUN。可以先用“120 秒系统代理验收”在不关闭其他客户端的情况下试用。
 
-界面构建位于 `.build/Preview/Build/Products/Release/ClairRoute.app`。未配置受信任本机签名身份时，网络开关禁用。可查看和编辑界面；保存节点会写入当前用户的明文 `profile.json`。
-
-推荐双击 `Scripts/Install ClairRoute.command`，或在终端执行下方命令。先退出 ClairRoute 预览；安装器复用或创建本机签名身份、构建后才请求管理员授权，最后验证两个空闲服务的真实 PID 与新鲜就绪记录。安装不会开启代理。
-
-```bash
-bash 'Scripts/Install ClairRoute.command'
-```
-
-需要分步操作时：
-
-```bash
-# 普通用户运行，不要 sudo。创建或复用 login Keychain 中的代码签名身份。
-Scripts/create-local-identity.sh
-
-# 填入上一步输出的40位SHA1。
-IDENTITY='替换为证书SHA1'
-Scripts/build-local.sh "$IDENTITY"
-
-# 先退出所有 ClairRoute 窗口/进程。安装本身不启用代理。
-sudo Scripts/install-local.sh "$IDENTITY"
-open /Applications/ClairRoute.app
-```
-
-签名构建位于 `.build/Local/Build/Products/Release/ClairRoute.app`。安装脚本只使用该固定构建位置，先复制到 root 私有 staging，再验签、校验 SHA256，备份旧 App / 内核 / 数据 / 两个 daemon，完成事务替换。失败尝试回滚，恢复不完整则保留 `.maintenance` 和备份。已有未恢复记录时拒绝安装或卸载，不要删除记录绕过检查。
-
-亦提供 `ClairRoute.xcodeproj` 与共享 scheme，包括 GUI、Helper、RecoveryGuard 三个 target。新增源文件后运行 `python3 Scripts/generate-project.py` 更新工程。Xcode 默认不签名；正式本机构建建议用上述脚本，确保三份签名与 sealed manifest 一致。
-
-本机完整 `xcodebuild` 曾在加载 `IDESimulatorFoundation` 时因 `/Library/Developer/PrivateFrameworks/DVTDownloads.framework` 缺失符号而失败。`build-native.py` 直接调用已选 Xcode 的编译器并组装相同 bundle；没有修改系统 Xcode。SwiftUI 宏编译需要系统宏插件进程可运行。
-
-## 签名方案
-
-**没有付费账号：** 当前采用自签名代码签名证书、精确证书固定和需管理员授权的手动 LaunchDaemon。私钥留在 login Keychain，证书仅加入 codeSign 用途信任，不改变 TLS 信任。双方 XPC requirement 使用精确 bundle identifier + `certificate leaf` SHA1；二进制完整性另用 SHA256。此方式用于本机，不具备 Developer ID 公证与分发能力。
-
-**有付费账号：** 可另做 Developer ID Application 签名、公证、staple 与 `SMAppService.daemon` 发布构建；双方 requirement 应使用 Apple anchor、固定 Team ID 和 identifier，适应证书续期。macOS 对后台 daemon 的注册 / 批准有签名和公证策略要求，不能将自签名或 ad-hoc 的 SMAppService 注册视为稳定发布方案。工程包含标准内嵌 daemon plist；当前实际可用的部署路径是手动本机安装。未使用 SMJobBless，也不关闭 SIP 或 Gatekeeper。
-
-## 权限和秘密
-
-```mermaid
-flowchart LR
-  GUI[SwiftUI GUI · 用户权限] -->|双向验签 Mach XPC| Helper[Helper · root]
-  GUI --> Profile[用户 profile.json · 0600]
-  Helper -->|固定路径 / 内存 stdin| Core[mihomo · root]
-  Helper -->|root 私有 Unix socket| Core
-  Helper --> System[DNS / 系统代理]
-  Core --> TUN[TUN]
-  Guard[独立 RecoveryGuard · root] -->|验收到期 / 原进程失效| Restore[按身份停止并恢复]
-```
-
-- Helper 无 TCP 管理端口。mihomo controller 位于 root:wheel、0700 的 `run/`，不向 GUI 直接开放。固定 mihomo 的 Unix controller 不验证 HTTP secret 且自行设置 socket 权限，因此目录隔离和有限 XPC 是必要边界。
-- XPC 仅接受有界类型：应用配置、停止 / 恢复、状态、心跳、固定连接快照、节点选择及固定目标测速。没有命令执行、任意路径、任意 YAML 或 HTTP 转发接口。检查当前 console UID、代码签名和会话所有权。
-- 密码、服务器 UUID、订阅 URL、订阅原始数据、节点信息和规则统一保存到 `~/Library/Application Support/ClairRoute/profile.json`。这是用户明确选择的明文存储；文件权限为 `0600`，所属目录为 `0700`，有当前用户文件访问权限的程序仍可读取内容。不要把此文件加入源码、日志或公开附件。
-- 当前文件格式为 v3：`nodes` / `subscriptions` 保存资料，`nodeSecrets` / `subscriptionSecrets` 保存凭据，内部引用用于关联记录。单文件上限为 32 MiB；导入、编辑、删除和订阅刷新都通过原子替换更新同一配置文件。失败时保留上一个完整版本，不会先覆盖一部分凭据再更新节点列表。日常启动、切换模式、读取节点和订阅刷新不访问钥匙串。
-- 旧版钥匙串配置需在应用内明确执行一次迁移：先读取所有旧凭据，再原子保存 v3 明文文件，保存成功后才删除旧条目。读取阶段可能仍需要 macOS 授权；迁移失败时原资料保留。若旧条目删除失败，文件保留待清理引用，只在用户明确重试时访问钥匙串；日常使用不会自动重试。
-- 本机代码签名私钥仍留在 login Keychain，用于构建和验签；它与订阅和节点凭据无关。重新安装仍需管理员授权，但不因正常读取新版配置而触发节点钥匙串提示。
-- 配置在内存中从基础模板、用户规则、订阅规则生成。订阅由普通权限 GUI 以 ephemeral HTTPS 获取和本地解析，生成 inline proxy-providers；不让 root 内核读取订阅 URL 或创建含密码的 provider 缓存。
-- mihomo `-t -f -` 经 stdin 校验，启动同样使用 stdin；热重载使用私有 socket 的 payload。上一版配置仅在内存保留，失败时回滚。没有写含密码的 config.yaml，没有把配置放进 argv 或日志。
-- URI、YAML 和规则均按不可信输入处理。YAML 支持 JSON、普通缩进映射 / 序列、引号与 flow collection；不执行标签，不展开 anchor / alias，不合并任意外部 provider。超限、未知影响连接语义的字段或危险字段会明确拒绝，不在线转换。
-- SS 插件仅允许内核支持的内置选项，不运行外部插件。SS2022 支持规范 Base64 单密钥，长度按 cipher 校验。
-
-## 网络恢复与验收
-
-默认 TUN 为 mixed、auto-route、auto-detect-interface、TCP / UDP 53 hijack、fake-ip，进程识别 strict。使用固定 `utun197`；已存在或检测到竞争 VPN / 默认隧道路由时拒绝启动。系统代理入口仅监听 `127.0.0.1:17890`，DNS 在 TUN 开启时监听 loopback 53，没有 LAN 管理接口。
-
-Helper 串行管理配置应用，先预检，再等内核状态健康，再修改系统设置。关闭监听前恢复指向它的 DNS / 代理。按 network service UUID 记录原值，恢复时只撤销仍由本应用拥有的值，不盲目覆盖另一 VPN 或用户后来修改的设置。
-
-生产内核以 suspended 状态创建，先持久记录固定路径、PID、出生时间和接口身份，再恢复执行。Helper 重启按身份回收旧内核并恢复网络。GUI 退出等待恢复；进程退出 / XPC 断开 / 心跳租约过期触发恢复。休眠暂停 GUI 租约判断，唤醒有宽限；网络事件合并后重新检测和应用，失败保守关闭。
-
-**首次联网验收使用“开始 120 秒 TUN 验收”：**
-
-如果当前连接依赖其他客户端的 TUN，可先选择“开始 120 秒系统代理验收”：保持现有客户端运行，只把系统代理临时指向 ClairRoute；不创建新 TUN、不修改 DNS，到期恢复原代理。这只验证内核与系统代理恢复，不代表独立 TUN 分流已验证。任何新代理都可能暂时影响遵循系统代理的连接；限时回滚仍然启用。不要直接关闭维持当前会话的其他 TUN。
-
-1. 先完成离线测试、安装及恢复服务状态检查，保留现有其他代理客户端的安装和配置。
-2. 一次只改变一个接管方式。不要同时开启其他客户端的增强模式。
-3. Helper 必须看到独立 RecoveryGuard 的真实 root 进程与新鲜心跳，才允许限时会话开始。
-4. Guard 用连续时钟计算固定 120 秒期限，睡眠时间也计入；重配不能延长期限或偷偷转成普通会话。
-5. 到期先写持久恢复标记阻止新会话，按固定路径、root UID、PID 和出生时间确认 Helper，再终止它并取得跨进程锁，恢复内核 / DNS / 系统代理。与 Helper 不并发写恢复状态，PID 复用不会导致误杀。
-6. 回滚不需要 GUI、网络或远程助手在线；恢复未成功会保留记录并继续阻止启动。物理网络故障或系统网络 API 失效仍可能需要本机处理，不能承诺任何故障下绝不离线。
-
-**本机恢复入口：** 应用“恢复网络并关闭代理”；GUI 失效时由 Helper watchdog 处理；限时验收中由独立 Guard 到期恢复。不要使用全局 route flush、删除 utun 或删除恢复 journal 代替恢复。需要手动重启守护进程时，固定命令如下（会停止 ClairRoute 当前会话）：
+**网络出问题了怎么办？**
+先在 App 里点“恢复网络并关闭代理”。如果界面打不开，后台的 Helper 会在心跳超时后自动恢复。仍不行时可以重启两个后台服务（会结束当前代理会话）：
 
 ```bash
 sudo launchctl kickstart -k system/local.nano.ClairRoute.RecoveryGuard
 sudo launchctl kickstart -k system/local.nano.ClairRoute.Helper
 ```
 
-普通会话不会因 Guard 空闲心跳而改动网络；“直连”模式也不等于关闭 TUN。
+请不要手动删除恢复记录、删除 utun 网卡或清空路由表，这些操作会让 ClairRoute 无法正确还原你的原始设置。
 
-## 离线测试与实际验收
+**我的密码和订阅地址存在哪里？**
+存放在 `~/Library/Application Support/ClairRoute/profile.json`，是**明文**，文件权限 `0600`（只有你的账户能读）。能以你的身份运行的程序仍然可以读到它，所以不要把这个文件提交到代码仓库、贴到日志或发给别人。订阅由界面进程直接下载并在本机解析，root 权限的内核看不到订阅地址。
 
-`Tests/` 的解析、golden 配置、排序、资料事务、响应头和恢复判定测试使用虚构凭据、临时目录及模拟旧版 vault，不访问真实 Keychain、订阅网络或系统网络设置。测试命令见 `Tests/README.md`，验收记录见 `Docs/Verification.md`。
+**为什么不放在钥匙串里？**
+早期版本把凭据放在钥匙串里，现在改为上面的本机配置文件，日常启动、切换模式和刷新订阅都不再访问钥匙串。如果你的配置来自旧版本，App 会提示你点一次“迁移旧配置”；迁移失败时原数据保持不变。
 
-实际验收必须分别记录：computer use 界面操作、签名与安装、TUN / 系统代理、真实节点连接与延迟、进程规则命中、LAN 端口检查、GUI 强杀、唤醒与切网。编译成功或纯函数测试通过不能替代这些验收；合盖 30 分钟和真实热点切换需要单独观察。
+## 卸载
 
-## 完全卸载
+在“高级与维护”页点“完全卸载…”。App 会先恢复网络、删除本应用保存的节点和订阅，然后打开终端请求管理员密码移除系统组件。
 
-在“高级与维护”点击“完全卸载 ClairRoute”，确认后程序恢复网络、清除明文节点 / 订阅配置并退出，终端请求管理员授权移除组件。若仍有旧版钥匙串数据，先完成清理；失败时保留待清理引用，不跳过失败直接删除记录。
-
-也可先手动恢复、删除本应用全部节点和订阅、退出，再执行：
+也可以手动执行：先在 App 里恢复网络、删除所有节点和订阅并退出，然后运行
 
 ```bash
 sudo Scripts/uninstall-local.sh
 ```
 
-移除范围：`/Applications/ClairRoute.app`、两个 `local.nano.ClairRoute.*` LaunchDaemon、`/Library/Application Support/ClairRoute`、当前用户 `~/Library/Application Support/ClairRoute`。检测到节点、订阅、任何非空凭据字典、待删除旧版 Keychain 引用或恢复记录时拒绝删除，格式未知或损坏的配置也会保留。签名证书 / 私钥和项目源码保留；不再使用时在钥匙串访问中删除 `ClairRoute Local Development`，并自行删除项目目录。
+会被移除的内容：`/Applications/ClairRoute.app`、两个 `local.nano.ClairRoute.*` 后台服务、`/Library/Application Support/ClairRoute` 和 `~/Library/Application Support/ClairRoute`。如果检测到还有节点、订阅或未完成的恢复记录，卸载会拒绝执行，以免误删数据。本机签名证书不会被删除，不再需要时可以在“钥匙串访问”里删除 `ClairRoute Local Development`。
 
-## 固定资源与许可
+## 工作原理
 
-内核来自 [MetaCubeX/mihomo 官方 v1.19.31](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.31)。原始压缩包、原始二进制和本机重签二进制的 SHA256 分开记录；Helper 信任签名 App 封装的 manifest。内核更新仅通过修改固定官方版本与摘要、重新下载 / 编译 / 签名进行，不自动更新。
+```mermaid
+flowchart LR
+  GUI[ClairRoute.app<br/>普通用户权限] -->|双向验签的 XPC| Helper[Helper<br/>root]
+  GUI --> Profile[profile.json<br/>0600]
+  Helper -->|stdin 传入配置| Core[mihomo 内核<br/>root]
+  Helper -->|私有 Unix socket| Core
+  Helper --> System[DNS / 系统代理]
+  Core --> TUN[utun197]
+  Guard[RecoveryGuard<br/>root，独立进程] -->|限时验收到期| Restore[恢复网络]
+```
 
-GEOSITE 来自 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 2026-09-30 数据快照，SHA256 固定在 GeoManifest.json，随 App 打包；安装及 Helper 均校验，root 不自动下载规则库。
+- 界面以普通用户身份运行，只能通过一组固定、有长度上限的 XPC 请求和 root 权限的 Helper 通信；双方都校验对方的代码签名。没有执行命令、任意路径、任意 YAML 或 HTTP 转发之类的接口。
+- 配置只在内存中生成，经 stdin 交给内核，不会写出含密码的配置文件，也不会出现在命令行参数或日志里。
+- 内核的控制接口是 root 私有目录下的 Unix socket，没有 TCP 管理端口；代理入口只监听 `127.0.0.1:17890`，不对局域网开放。
+- Helper 按网络服务记录被修改前的 DNS 和代理设置，恢复时只撤销仍由自己设置的值，不会覆盖你或其他软件后来做的修改。
+- 订阅、分享链接和 YAML 一律视为不可信输入：解析器有严格的大小和深度限制，拒绝外部脚本、外部 provider 和不支持的字段，不会静默丢弃。
 
-上游 GPL-3.0 原文见 `Resources/mihomo-LICENSE`，来源和快照见 `THIRD-PARTY-NOTICES.txt`。上游另有衍生软件名称不含 Mihomo 的使用声明，故本客户端命名 ClairRoute。当前为用户本机开发；公开分发前应落实对应源码、构建资料、许可和公证义务。GUI 发布许可证尚未单独选定。
+更详细的设计说明见 [Docs/Architecture.md](Docs/Architecture.md)。
+
+## 从源码构建
+
+只编译、不安装（得到一个不能开启代理的界面预览版本）：
+
+```bash
+bash Scripts/fetch-core.sh        # 下载并校验固定版本内核，不执行
+python3 Scripts/build-native.py   # 输出到 .build/Preview/Build/Products/Release/ClairRoute.app
+```
+
+分步完成签名构建和安装：
+
+```bash
+Scripts/create-local-identity.sh                 # 普通用户运行，输出证书的 40 位 SHA1
+IDENTITY='上一步输出的 SHA1'
+Scripts/build-local.sh "$IDENTITY"               # 输出到 .build/Local/Build/Products/Release/ClairRoute.app
+sudo Scripts/install-local.sh "$IDENTITY"        # 先退出所有 ClairRoute 窗口
+```
+
+安装脚本会先把构建产物复制到 root 私有的临时目录，校验签名和 SHA256，备份旧版本后再整体替换；失败时自动回滚。
+
+仓库也包含 `ClairRoute.xcodeproj`（GUI、Helper、RecoveryGuard 三个 target），方便在 Xcode 里浏览和调试。新增源文件后运行 `python3 Scripts/generate-project.py` 更新工程。Xcode 工程默认不签名，正式本机构建请用上面的脚本。
+
+### 测试
+
+```bash
+zsh Tests/run.sh             # 解析器、配置生成、资料库事务等离线测试，不访问网络和钥匙串
+zsh Tests/core-preflight.sh  # 可选：用固定内核的 -t 模式校验生成的配置
+```
+
+离线测试通过只说明代码逻辑正确，不代表真实联网可用。真实环境的验收记录见 [Docs/Verification.md](Docs/Verification.md)。
+
+### 目录结构
+
+| 目录 | 内容 |
+| --- | --- |
+| `App/` | SwiftUI 界面、资料库、订阅下载 |
+| `Helper/` | root Helper 与 RecoveryGuard |
+| `Shared/` | 共用模型、YAML / 订阅解析器、配置生成器 |
+| `Scripts/` | 下载内核、构建、签名、安装、卸载 |
+| `Tests/` | 离线测试与签名预检 |
+| `Resources/` | Info.plist、LaunchDaemon 定义、GEOSITE 数据、第三方许可 |
+| `Docs/` | 架构、组件契约、验收记录 |
+
+## 签名与发布状态
+
+当前使用本机自签名证书加精确证书指纹固定，适合在自己的电脑上使用，但不具备 Developer ID 签名和公证，不能直接分发给别人安装。要做公开发布，还需要 Developer ID 签名、公证、`SMAppService` 注册，以及把 XPC 校验改为 Apple 根证书加 Team ID。详见 [Docs/Architecture.md](Docs/Architecture.md#签名方案)。
+
+## 许可与致谢
+
+- 内核：[MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) v1.19.31，GPL-3.0，原文见 `Resources/mihomo-LICENSE`。内核未做修改，只做了本机代码签名；更新内核只能通过修改固定版本号和摘要后重新构建。
+- 域名分类数据：[MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 `geosite.dat`（2026-09-30 快照，SHA256 固定在 `Resources/GeoManifest.json`）。
+- 来源和快照信息见 `Resources/THIRD-PARTY-NOTICES.txt`。mihomo 上游请求衍生软件不要在名称中使用 “mihomo”，因此本项目命名为 ClairRoute，与 MetaCubeX 无关联。
+
+ClairRoute 本身的源码许可证尚未确定。

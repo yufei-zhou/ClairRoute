@@ -21,7 +21,7 @@ import Combine
     @Published var connections: [ConnectionSnapshot] = []
     @Published var connectionPanelVisible = false
     @Published var delays: [String: String] = [:]
-    @Published var selectedPage = "运行"
+    @Published var selectedPage: AppPage = .overview
     var signed: Bool { HelperClient.hasSigningIdentity }
     var phaseLabel: String {
         guard signed else { return "界面模式" }
@@ -35,7 +35,31 @@ import Combine
         case .needsAttention: return "需要处理"
         }
     }
-    var systemSymbol: String { status.recoveryPending || error != nil ? "exclamationmark.triangle" : "network" }
+    var needsAttention: Bool { status.recoveryPending || status.phase == .needsAttention || unconfirmed }
+    var statusSymbol: String {
+        if !signed { return "eye" }
+        if needsAttention || !helperConnected { return "exclamationmark.triangle.fill" }
+        return status.coreRunning ? "checkmark.shield.fill" : "shield.slash"
+    }
+    var statusTint: Color {
+        if !signed { return .secondary }
+        if needsAttention || !helperConnected { return .orange }
+        switch status.phase {
+        case .active: return .green
+        case .preparing, .starting, .reconfiguring, .restoring: return .blue
+        case .idle, .needsAttention: return .secondary
+        }
+    }
+    /// One-line explanation shown under the phase label on the overview page.
+    var statusDetail: String {
+        guard signed else { return "界面预览版本：可以编辑节点和规则，但不能开启代理。" }
+        guard helperConnected else { return "暂时无法连接后台服务，网络状态未确认。" }
+        if needsAttention { return status.message.isEmpty ? "有未完成的网络恢复，请点击「恢复网络并关闭代理」。" : status.message }
+        guard status.coreRunning else { return "TUN 和系统代理都已关闭，网络未被接管。" }
+        let takeover = [status.tunEnabled ? "增强模式" : nil, status.systemProxyEnabled ? "系统代理" : nil].compactMap { $0 }
+        let modeName = switch mode { case .rule: "规则模式"; case .global: "全局模式"; case .direct: "直连模式" }
+        return (takeover.isEmpty ? "内核运行中" : takeover.joined(separator: " + ")) + " · " + modeName + (activeTrialMode ? " · 限时验收中" : "")
+    }
     var policies: [String] { ["PROXY", "DIRECT", "REJECT"] + library.nodes.map(\.name) }
 
     init() {
@@ -169,7 +193,7 @@ import Combine
         catch { delays[name] = "不可用"; self.error = error.localizedDescription }
     }
     func addRule(_ rule: RoutingRule) {
-        do { try library.persistRules(library.rules + [rule]); selectedPage = "规则"; notice = "规则已保存；点击「应用配置」生效。"; error = nil }
+        do { try library.persistRules(library.rules + [rule]); selectedPage = .rules; notice = "规则已保存；点击「应用配置」生效。"; error = nil }
         catch { self.error = error.localizedDescription }
     }
     func ruleForProcess(_ row: ConnectionSnapshot) {
@@ -200,10 +224,15 @@ import Combine
             self.error = "无法确认网络恢复已完成：\(error.localizedDescription)"; return false
         }
     }
+    /// Runs a library edit and reports the outcome in the message bar.
     func perform(_ action: () throws -> Void) {
-        do { try action(); error = nil; notice = "已保存；运行中的会话请点击「应用配置」。" }
-        catch { self.error = error.localizedDescription }
+        library.clearMessages()
+        do {
+            try action(); error = nil
+            notice = library.notice ?? (status.coreRunning ? "已保存；点击「应用配置」让运行中的会话生效。" : "已保存。")
+        } catch { self.error = error.localizedDescription }
     }
+    func dismissError() { error = nil; library.clearMessages() }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {

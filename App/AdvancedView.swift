@@ -8,37 +8,57 @@ struct AdvancedView: View {
     @State private var confirmUninstall = false
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("高级 YAML").font(.headline)
-                YAMLEditor(text: $yaml).frame(height: 270).clipShape(RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
-                HStack {
-                    Button("载入示例") { yaml = AdvancedOptions.exampleYAML }
-                    Spacer(); Button("校验并保存 YAML") { model.perform { try library.saveAdvancedYAML(yaml) } }.buttonStyle(.borderedProminent)
-                        .disabled(library.migrationRequired)
-                }
-                Divider()
-                Text("安装与恢复").font(.headline)
-                LabeledContent("本机签名", value: model.signed ? "已配置固定签名身份" : "未配置")
-                LabeledContent("内核版本", value: AppConstants.coreVersion)
-                HStack {
-                    Button("停止并恢复网络") { Task { _ = await model.stopAndRestore() } }.disabled(model.busy)
-                    Button("打开使用指南") {
-                        if let url = Bundle.main.url(forResource: "README", withExtension: "md") { NSWorkspace.shared.open(url) }
-                    }
-                    Button("官方内核来源") { NSWorkspace.shared.open(URL(string: "https://github.com/MetaCubeX/mihomo/releases/tag/v" + AppConstants.coreVersion)!) }
-                    Button("退出 ClairRoute") { NSApp.terminate(nil) }.disabled(model.busy)
-                }
-                if library.pendingSecretCleanup > 0 {
+            VStack(alignment: .leading, spacing: 20) {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("只允许修改 DNS、IPv6、日志级别、TCP 并发和 TUN 协议栈 / MTU。监听端口、控制接口、文件路径和脚本不能在这里覆盖。")
+                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        YAMLEditor(text: $yaml).frame(height: 270)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                        HStack {
+                            Button("恢复默认值") { yaml = AdvancedOptions.exampleYAML }
+                            Spacer()
+                            Button("校验并保存") { model.perform { try library.saveAdvancedYAML(yaml) } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(library.migrationRequired)
+                        }
+                    }.padding(6)
+                } label: { Label("高级 YAML", systemImage: "curlybraces") }
+
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LabeledContent("本机签名", value: model.signed ? "已配置固定签名身份" : "未配置（界面预览版本）")
+                        LabeledContent("内核版本", value: "mihomo v" + AppConstants.coreVersion)
+                        HStack {
+                            Button("停止并恢复网络") { Task { _ = await model.stopAndRestore() } }.disabled(model.busy)
+                            Button("打开使用说明") {
+                                if let url = Bundle.main.url(forResource: "README", withExtension: "md") { NSWorkspace.shared.open(url) }
+                            }
+                            Button("内核发布页") { NSWorkspace.shared.open(URL(string: "https://github.com/MetaCubeX/mihomo/releases/tag/v" + AppConstants.coreVersion)!) }
+                            Spacer()
+                            Button("退出 ClairRoute") { NSApp.terminate(nil) }.disabled(model.busy)
+                        }
+                        if library.pendingSecretCleanup > 0 {
+                            HStack {
+                                Text("还有 \(library.pendingSecretCleanup) 项旧钥匙串条目待清理，清理后才能卸载。")
+                                Spacer()
+                                Button("清理旧钥匙串") { model.perform { try library.retrySecretCleanup() } }
+                                    .disabled(model.busy || library.migrationRequired)
+                            }
+                        }
+                    }.padding(6)
+                } label: { Label("维护", systemImage: "wrench.and.screwdriver") }
+
+                GroupBox {
                     HStack {
-                        Text("卸载前请清理 \(library.pendingSecretCleanup) 项旧钥匙串条目。")
-                        Button("清理旧钥匙串") { model.perform { try library.retrySecretCleanup() } }
-                            .disabled(model.busy || library.migrationRequired)
-                    }
-                }
-                Divider()
-                Text("完全卸载").font(.headline)
-                Button("完全卸载 ClairRoute…", role: .destructive) { confirmUninstall = true }
-                    .disabled(model.busy || !model.signed || library.migrationRequired || library.pendingSecretCleanup > 0)
+                        Text("先恢复网络、删除本应用的节点和订阅，再打开终端请求管理员授权移除系统组件。签名证书和项目源码会保留。")
+                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("完全卸载…", role: .destructive) { confirmUninstall = true }
+                            .disabled(model.busy || !model.signed || library.migrationRequired || library.pendingSecretCleanup > 0)
+                    }.padding(6)
+                } label: { Label("卸载", systemImage: "trash") }
             }.padding(24)
         }.onAppear { yaml = library.advancedYAML.isEmpty ? AdvancedOptions.exampleYAML : library.advancedYAML }
         .confirmationDialog("删除 ClairRoute 的本机配置并卸载？", isPresented: $confirmUninstall) {

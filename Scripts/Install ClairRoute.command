@@ -35,7 +35,7 @@ DEVELOPER=$(/usr/bin/xcode-select -p)
 }
 SDK_VERSION=$(/usr/bin/xcrun --sdk macosx --show-sdk-version)
 [[ ${SDK_VERSION%%.*} -ge 26 ]] || { echo 'Select Xcode with a macOS 26 or newer SDK, then retry.' >&2; exit 1; }
-for name in create-local-identity.sh build-local.sh install-local.sh check-inactive.py check-ready.py; do
+for name in fetch-core.sh create-local-identity.sh build-local.sh install-local.sh check-inactive.py check-ready.py; do
   [[ -f "$ROOT/Scripts/$name" && ! -L "$ROOT/Scripts/$name" ]] || {
     echo 'Installer resources are missing or replaced by symlinks. Use the original source folder.' >&2; exit 1;
   }
@@ -49,6 +49,11 @@ echo 'The login Keychain will not be reset or replaced. macOS may show Keychain 
 echo 'No proxy, DNS or TUN mode is enabled by installation. No connectivity tests are run.'
 echo 'Quit ClairRoute first if another version is open.'
 echo
+if [[ ! -f "$ROOT/Vendor/mihomo" ]]; then
+  echo 'Downloading the pinned official mihomo core (checksum verified, not executed)…'
+  "$ROOT/Scripts/fetch-core.sh"
+  echo
+fi
 IDENTITY=$("$ROOT/Scripts/create-local-identity.sh" --print-hash)
 [[ "$IDENTITY" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'Could not obtain an unambiguous signing identity.' >&2; exit 1; }
 "$ROOT/Scripts/build-local.sh" "$IDENTITY"

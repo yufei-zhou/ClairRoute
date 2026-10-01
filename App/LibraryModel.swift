@@ -39,6 +39,8 @@ final class AppLibraryModel: ObservableObject {
     }
     deinit { timer?.cancel() }
 
+    func clearMessages() { error = nil; notice = nil }
+
     func readNode(id: UUID) throws -> ProxyNode {
         guard let metadata = store.snapshot.nodes.first(where: { $0.id == id }) else { throw StoreError.missingNode }
         return try store.readNode(metadata)

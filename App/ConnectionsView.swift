@@ -11,7 +11,7 @@ struct ConnectionsView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("\(rows.count) 条连接").font(.headline)
-                Spacer(); TextField("搜索进程、域名或节点", text: $filter).frame(width: 240)
+                Spacer(); TextField("搜索进程、域名或节点", text: $filter).textFieldStyle(.roundedBorder).frame(width: 240)
             }
             if !model.status.coreRunning {
                 ContentUnavailableView("内核尚未运行", systemImage: "network")
