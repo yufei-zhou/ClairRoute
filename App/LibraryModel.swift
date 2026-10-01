@@ -39,6 +39,8 @@ final class AppLibraryModel: ObservableObject {
     }
     deinit { timer?.cancel() }
 
+    func clearMessages() { error = nil; notice = nil }
+
     func readNode(id: UUID) throws -> ProxyNode {
         guard let metadata = store.snapshot.nodes.first(where: { $0.id == id }) else { throw StoreError.missingNode }
         return try store.readNode(metadata)
@@ -99,7 +101,7 @@ final class AppLibraryModel: ObservableObject {
         next.rules.append(contentsOf: parsed.rules.map { var rule = $0; rule.sourceID = nil; return rule })
         try validate(next, overrides: overrides)
         try commit(next, additions: additions, removing: removed)
-        notice = "已在本机导入 \(parsed.nodes.count) 个节点。" + (parsed.warnings.isEmpty ? "" : " 部分不支持字段已按安全规则处理。")
+        notice = "已在本机导入 \(parsed.nodes.count) 个节点。" + (parsed.warnings.isEmpty ? "" : " " + parsed.warnings.joined(separator: " "))
     }
 
     func addSubscription(name: String, url: String, interval: TimeInterval) throws {
@@ -146,7 +148,13 @@ final class AppLibraryModel: ObservableObject {
             var additions: [UUID: Data] = [:]
             var overrides: [UUID: ProxyNode] = [:]
             for var node in parsed.nodes {
-                guard !next.nodes.contains(where: { $0.name == node.name }) else { throw StoreError.duplicateName }
+                if next.nodes.contains(where: { $0.name == node.name }) {
+                    // Another subscription or a manual node already uses this name; disambiguate.
+                    let suffix = Self.truncated(" · " + metadata.name.replacingOccurrences(of: ",", with: " "), bytes: 48)
+                    let renamed = (Self.truncated(node.name, bytes: 128 - suffix.utf8.count) + suffix).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !next.nodes.contains(where: { $0.name == renamed }) else { throw StoreError.duplicateName }
+                    node.name = renamed
+                }
                 node.sourceID = id
                 if let existing = previous.first(where: { $0.name == node.name }) { node.id = existing.id }
                 let reference = UUID()
@@ -157,12 +165,15 @@ final class AppLibraryModel: ObservableObject {
             let subscriptionReference = UUID()
             next.subscriptions[currentIndex].secretID = subscriptionReference
             next.subscriptions[currentIndex].lastUpdated = Date()
-            next.subscriptions[currentIndex].userInfo = download.userInfo
+            // Many panels only send subscription-userinfo to some clients; keep the last known value.
+            if let info = download.userInfo { next.subscriptions[currentIndex].userInfo = info }
             additions[subscriptionReference] = try JSONEncoder().encode(SubscriptionSecret(url: secret.url, payload: download.data))
             if let selected = next.selectedNode, !next.nodes.contains(where: { $0.name == selected }) { next.selectedNode = nil }
+            // Rules pointing at a node the provider renamed or removed fall back to this subscription's group.
+            Self.repoint(&next, from: Set(previous.map(\.name)).subtracting(next.nodes.map(\.name)), to: ConfigurationBuilder.sourcePolicy(id))
             try validate(next, overrides: overrides)
             try commit(next, additions: additions, removing: removed)
-            notice = "订阅已更新：\(parsed.nodes.count) 个节点。点击「应用配置」后用于当前会话。"
+            notice = "订阅已更新：\(parsed.nodes.count) 个节点。点击「应用配置」后用于当前会话。" + (parsed.warnings.isEmpty ? "" : " " + parsed.warnings.joined(separator: " "))
         } catch {
             self.error = safeError(error)
             throw error
@@ -177,6 +188,7 @@ final class AppLibraryModel: ObservableObject {
         next.subscriptions.removeAll { $0.id == id }
         next.subscriptionRules.removeAll { $0.sourceID == id }
         if let selected = next.selectedNode, removedNodes.contains(where: { $0.name == selected }) { next.selectedNode = nil }
+        Self.repoint(&next, from: Set(removedNodes.map(\.name) + [ConfigurationBuilder.sourcePolicy(id)]), to: "PROXY")
         try validate(next)
         try commit(next, removing: Set(removedNodes.map(\.secretID) + [subscription.secretID]))
     }
@@ -186,6 +198,9 @@ final class AppLibraryModel: ObservableObject {
         guard let index = next.subscriptions.firstIndex(where: { $0.id == id }) else { throw StoreError.missingNode }
         next.subscriptions[index].enabled = enabled
         if !enabled, let selected = next.selectedNode, next.nodes.contains(where: { $0.sourceID == id && $0.name == selected }) { next.selectedNode = nil }
+        if !enabled {
+            Self.repoint(&next, from: Set(next.nodes.filter { $0.sourceID == id }.map(\.name) + [ConfigurationBuilder.sourcePolicy(id)]), to: "PROXY")
+        }
         try validate(next)
         try commit(next)
     }
@@ -249,6 +264,21 @@ final class AppLibraryModel: ObservableObject {
         notice = pendingSecretCleanup == 0 ? "配置已清理，可退出后卸载。" : "配置已清理；旧钥匙串条目可单独清理。"
     }
 
+    /// Cuts `text` at a character boundary so that it fits in `bytes` UTF-8 bytes.
+    private static func truncated(_ text: String, bytes: Int) -> String {
+        var result = ""
+        for character in text {
+            guard result.utf8.count + String(character).utf8.count <= bytes else { break }
+            result.append(character)
+        }
+        return result
+    }
+    /// Points user rules and the fallback at `replacement` when they name a policy that is going away.
+    private static func repoint(_ snapshot: inout LibrarySnapshot, from removed: Set<String>, to replacement: String) {
+        guard !removed.isEmpty else { return }
+        for index in snapshot.rules.indices where removed.contains(snapshot.rules[index].policy) { snapshot.rules[index].policy = replacement }
+        if removed.contains(snapshot.fallbackPolicy) { snapshot.fallbackPolicy = replacement }
+    }
     private func checkInterval(_ interval: TimeInterval) throws {
         guard interval.isFinite, (300...2_592_000).contains(interval) else { throw StoreError.invalidInterval }
     }
@@ -296,7 +326,9 @@ final class AppLibraryModel: ObservableObject {
     }
     private func canonicalAdvanced(_ value: AdvancedOptions) -> String { value.yamlString }
     private func safeError(_ error: any Error) -> String {
-        if error is StoreError || error is SubscriptionError { return error.localizedDescription }
+        // These error types are built never to echo URLs, credentials or raw input.
+        if error is StoreError || error is SubscriptionError || error is ConfigurationError
+            || error is SubscriptionFieldDiagnostic || error is YAMLParseError { return error.localizedDescription }
         if error is CancellationError { return "操作已取消。" }
         return "资料操作失败，原配置已保留；地址、凭据与原始响应不会写入日志。"
     }

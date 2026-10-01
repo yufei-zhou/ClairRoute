@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -eu
 TASK_ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
-TASK_BUILD="$TASK_ROOT/../../work/clairroute-offline-tests"
+TASK_BUILD="$TASK_ROOT/.build/offline-tests"
 mkdir -p "$TASK_BUILD/module-cache"
 xcrun swiftc -swift-version 6 -module-cache-path "$TASK_BUILD/module-cache" \
   "$TASK_ROOT"/Shared/*.swift \

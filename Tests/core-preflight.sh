@@ -2,7 +2,7 @@
 # Explicitly opt-in: unlike run.sh this starts the bundled core in test-only mode.
 set -euo pipefail
 TASK_ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
-TASK_BUILD="$TASK_ROOT/../../work/clairroute-core-preflight"
+TASK_BUILD="$TASK_ROOT/.build/core-preflight"
 mkdir -p "$TASK_BUILD/module-cache" "$TASK_BUILD/runtime"
 # Vendor/mihomo is the original official binary, before application-local signing.
 /usr/bin/python3 - "$TASK_ROOT" <<'PY'

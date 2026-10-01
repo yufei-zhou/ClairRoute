@@ -158,6 +158,8 @@ final class CoreProcess {
             kill(child, SIGKILL)
             var status: Int32 = 0; waitpid(child, &status, 0)
             observation?.cancel()
+            // The deferred cleanup closes the write end; stop deinit from closing it a second time.
+            input = -1
             throw error
         }
         succeeded = true
@@ -190,7 +192,8 @@ final class CoreProcess {
 
     func terminate() throws {
         if running {
-            guard identity.stillMatches else { throw HelperFailure.refused("Core process identity changed; refusing to signal another process.") }
+            // A child that exits between the two checks is a zombie whose identity can no longer be read.
+            guard identity.stillMatches || !running else { throw HelperFailure.refused("Core process identity changed; refusing to signal another process.") }
             kill(pid, SIGTERM)
             let deadline = ProcessInfo.processInfo.systemUptime + 3
             while running, ProcessInfo.processInfo.systemUptime < deadline { Thread.sleep(forTimeInterval: 0.05) }

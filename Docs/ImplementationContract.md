@@ -12,7 +12,7 @@ Offline coverage includes URI/YAML parsing, golden configuration output, rule or
 
 | Component | Privilege and responsibility |
 | --- | --- |
-| `App/` | Login user. Menu bar, settings, editors, connections, Keychain and App lifecycle. `AppLibraryModel` is MainActor; library edits are saved before the user chooses Apply. |
+| `App/` | Login user. Single main window (opened from Spotlight; no Dock or menu bar icon), editors, connections, plaintext library, one-time legacy Keychain migration and App lifecycle. `AppLibraryModel` is MainActor; library edits are saved before the user chooses Apply. |
 | `Helper/` | Root LaunchDaemon. Authenticated typed XPC, serial sessions, core lifecycle, proxy/DNS ownership, GUI watchdog, sleep/network reconciliation. |
 | Pinned mihomo | Root process started only from the fixed root-owned verified copy. No root subscription downloads or automatic updates. |
 | `ClairRouteRecoveryGuard` | Separate root LaunchDaemon for independent, timed trial rollback. No TCP/XPC administration interface. |
@@ -38,9 +38,9 @@ User rules precede subscription rules, retaining order within each part; the fir
 
 ## Library and subscriptions
 
-Version-2 user Application Support `ClairRoute/profile.json` contains node/subscription metadata, rules, selection, fallback, typed advanced options, pending-secret references and optional legacy migration metadata. File/directory permissions are 0600/0700. Authentication UUIDs, passwords and subscription URLs are absent.
+Version-3 user Application Support `ClairRoute/profile.json` contains node/subscription metadata, rules, selection, fallback, typed advanced options and, in `nodeSecrets` / `subscriptionSecrets`, the complete node credentials and subscription URL/raw payload in **plaintext**. File/directory permissions are 0600/0700; any process running as the same user can still read it. The file is limited to 32 MiB and every edit replaces it atomically, so a failure keeps the previous complete version.
 
-Keychain service `local.nano.ClairRoute.NodeSecrets` stores complete node JSON and subscription URL/raw payload under fresh app-generated UUID references. Write-ahead pending references, fresh Keychain items, atomic metadata replacement and deferred deletion retain the previous committed profile on failure. Cleanup survives restart and legacy single-node/password metadata migrates transactionally. Unfinished Keychain deletion blocks complete uninstall.
+Older versions stored secrets in Keychain service `local.nano.ClairRoute.NodeSecrets`. Migration is an explicit user action: all legacy secrets are read first, the v3 file is saved atomically, and only then are the Keychain items deleted. Failed deletions remain as pending references that are retried only on explicit request; ordinary launch, mode switches and subscription refresh never touch Keychain. Unfinished Keychain deletion blocks complete uninstall.
 
 Downloads use ephemeral URLSession without disk cache, cookies or credential storage. URLs/redirects must be HTTPS; URL userinfo/fragments are rejected. Streaming is limited to 1 MiB with timeouts and five redirects. `subscription-userinfo` counters/expiry are parsed locally. Automatic refresh runs while GUI is open, at intervals from five minutes to thirty days; it saves library data without silently applying a running session.
 

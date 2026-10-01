@@ -31,7 +31,8 @@ install -d -o root -g wheel -m 700 "$SUPPORT/state" "$SUPPORT/run"
 mkdir -m 700 "$TRANSACTION"
 STAGE="$TRANSACTION/stage"
 BACKUP="$TRANSACTION/backup"
-mkdir -m 700 "$STAGE" "$BACKUP"
+# Nothing has been changed yet; do not leave a lock that blocks every later install.
+mkdir -m 700 "$STAGE" "$BACKUP" || { rm -rf "$TRANSACTION"; exit 1; }
 OLD_LOADED=0
 OLD_GUARD_LOADED=0
 STOPPED_OLD=0
