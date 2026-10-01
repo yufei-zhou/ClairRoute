@@ -155,7 +155,7 @@ zsh Tests/run.sh             # 解析器、配置生成、资料库事务等离�
 zsh Tests/core-preflight.sh  # 可选：用固定内核的 -t 模式校验生成的配置
 ```
 
-离线测试通过只说明代码逻辑正确，不代表真实联网可用。真实环境的验收记录见 [Docs/Verification.md](Docs/Verification.md)。
+离线测试通过只说明代码逻辑正确，不代表真实联网可用。改动网络相关代码后，请在真机上做一次 120 秒限时验收。
 
 ### 目录结构
 
@@ -167,7 +167,7 @@ zsh Tests/core-preflight.sh  # 可选：用固定内核的 -t 模式校验生成
 | `Scripts/` | 下载内核、构建、签名、安装、卸载 |
 | `Tests/` | 离线测试与签名预检 |
 | `Resources/` | Info.plist、LaunchDaemon 定义、GEOSITE 数据、第三方许可 |
-| `Docs/` | 架构、组件契约、验收记录 |
+| `Docs/` | 架构与组件契约 |
 
 ## 签名与发布状态
 

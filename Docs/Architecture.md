@@ -1,6 +1,6 @@
 # ClairRoute 架构与安全设计
 
-本文面向想了解实现细节或参与开发的读者。日常使用请看 [README](../README.md)；英文的组件契约见 [ImplementationContract.md](ImplementationContract.md)，验收记录见 [Verification.md](Verification.md)。
+本文面向想了解实现细节或参与开发的读者。日常使用请看 [README](../README.md)；英文的组件契约见 [ImplementationContract.md](ImplementationContract.md)。
 
 ## 组成部分
 
@@ -74,9 +74,9 @@ sudo launchctl kickstart -k system/local.nano.ClairRoute.Helper
 
 ## 离线测试与实际验收
 
-`Tests/` 的解析、golden 配置、排序、资料事务、响应头和恢复判定测试使用虚构凭据、临时目录及模拟旧版 vault，不访问真实 Keychain、订阅网络或系统网络设置。测试命令见 `Tests/README.md`，验收记录见 `Docs/Verification.md`。
+`Tests/` 的解析、golden 配置、排序、资料事务、响应头和恢复判定测试使用虚构凭据、临时目录及模拟旧版 vault，不访问真实 Keychain、订阅网络或系统网络设置。测试命令见 `Tests/README.md`。
 
-实际验收必须分别记录：computer use 界面操作、签名与安装、TUN / 系统代理、真实节点连接与延迟、进程规则命中、LAN 端口检查、GUI 强杀、唤醒与切网。编译成功或纯函数测试通过不能替代这些验收；合盖 30 分钟和真实热点切换需要单独观察。
+真机验收应分别覆盖：界面操作、签名与安装、TUN / 系统代理、真实节点连接与延迟、进程规则命中、LAN 端口检查、GUI 强杀、唤醒与切网。编译成功或纯函数测试通过不能替代这些验收；合盖 30 分钟和真实热点切换需要单独观察。
 
 ## 固定资源与许可
 
