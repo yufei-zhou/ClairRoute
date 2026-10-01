@@ -34,7 +34,7 @@ struct LibraryView: View {
                             }
                             Spacer()
                             if library.refreshing.contains(subscription.id) { ProgressView().controlSize(.small) }
-                            Button("刷新") { Task { do { try await library.refreshSubscription(id: subscription.id) } catch { model.error = error.localizedDescription } } }.disabled(library.refreshing.contains(subscription.id))
+                            Button("刷新") { Task { do { try await library.refreshSubscription(id: subscription.id); model.notice = library.notice ?? "订阅已更新。" } catch { model.error = error.localizedDescription } } }.disabled(library.refreshing.contains(subscription.id))
                             Button("设置") { editingSubscription = subscription }
                             Button(role: .destructive) { subscriptionToDelete = subscription } label: { Image(systemName: "trash") }.help("删除订阅及其节点")
                         }.padding(10).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
