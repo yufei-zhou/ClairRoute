@@ -78,6 +78,31 @@ struct LibrarySnapshot: Codable, Sendable {
     var activeSecretIDs: Set<UUID> {
         Set(nodes.map(\.secretID) + subscriptions.map(\.secretID) + [legacyProfile?.node?.id].compactMap { $0 })
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, nodes, subscriptions, rules, subscriptionRules, fallbackPolicy, selectedNode
+        case advanced, pendingSecretIDs, nodeSecrets, subscriptionSecrets, legacyProfile
+    }
+}
+
+extension LibrarySnapshot {
+    /// Missing keys fall back to defaults so that adding a field never makes an existing profile unreadable.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        version = try c.decode(Int.self, forKey: .version)
+        nodes = try c.decodeIfPresent([NodeMetadata].self, forKey: .nodes) ?? []
+        subscriptions = try c.decodeIfPresent([SubscriptionMetadata].self, forKey: .subscriptions) ?? []
+        rules = try c.decodeIfPresent([RoutingRule].self, forKey: .rules) ?? [.chatGPT]
+        subscriptionRules = try c.decodeIfPresent([RoutingRule].self, forKey: .subscriptionRules) ?? []
+        fallbackPolicy = try c.decodeIfPresent(String.self, forKey: .fallbackPolicy) ?? "DIRECT"
+        selectedNode = try c.decodeIfPresent(String.self, forKey: .selectedNode)
+        advanced = try c.decodeIfPresent(AdvancedOptions.self, forKey: .advanced) ?? AdvancedOptions()
+        pendingSecretIDs = try c.decodeIfPresent([UUID].self, forKey: .pendingSecretIDs) ?? []
+        nodeSecrets = try c.decodeIfPresent([String: ProxyNode].self, forKey: .nodeSecrets)
+        subscriptionSecrets = try c.decodeIfPresent([String: SubscriptionSecret].self, forKey: .subscriptionSecrets)
+        legacyProfile = try c.decodeIfPresent(LegacySavedProfile.self, forKey: .legacyProfile)
+    }
 }
 
 enum StoreError: LocalizedError {

@@ -59,11 +59,11 @@ final class SessionCoordinator: @unchecked Sendable {
             }
             defer { transaction.release() }
             var failures: [String] = []
-            do { try core.recoverPreviousProcess() }
-            catch { failures.append("The previous core process could not be safely recovered.") }
-            // Still attempt owned DNS/proxy recovery if an independent core check failed.
+            // Restore owned DNS/proxy first, while a surviving core can still serve them.
             do { try network.recoverIfNeeded() }
             catch { failures.append("The previous DNS or system proxy settings could not be restored.") }
+            do { try core.recoverPreviousProcess() }
+            catch { failures.append("The previous core process could not be safely recovered.") }
             if if_nametoindex(AppConstants.tunInterfaceName) != 0 {
                 unresolvedPreviousInterface = true
                 failures.append("The reserved TUN interface is already present. Its ownership cannot be established after restart; stop the previous session before continuing.")
@@ -337,10 +337,20 @@ final class SessionCoordinator: @unchecked Sendable {
         networkWork?.cancel()
         reconciliationPending = false
         var failures: [String] = []
-        do { try network.restoreAll() }
-        catch { failures.append("DNS or system proxy restoration is incomplete.") }
-        do { try core.stop() }
-        catch { failures.append(safeMessage(error)) }
+        var restored = false
+        for attempt in 0..<3 where !restored {
+            do { try network.restoreAll(); restored = true }
+            catch { if attempt < 2 { Thread.sleep(forTimeInterval: 0.5) } }
+        }
+        if !restored { failures.append("DNS or system proxy restoration is incomplete.") }
+        // Keep the core serving loopback DNS while system DNS still points at it;
+        // stopping it now would leave the Mac without name resolution.
+        if network.ownsDNS && core.running {
+            failures.append("System DNS still points at ClairRoute, so the core was kept running. Retry restoration.")
+        } else {
+            do { try core.stop() }
+            catch { failures.append(safeMessage(error)) }
+        }
         if unresolvedPreviousInterface {
             if if_nametoindex(AppConstants.tunInterfaceName) == 0 { unresolvedPreviousInterface = false }
             else { failures.append("A previous or conflicting TUN interface is still present; its ownership is unknown and it was not deleted.") }
@@ -358,7 +368,7 @@ final class SessionCoordinator: @unchecked Sendable {
         let completedMessage = network.lastRestorationNotice.map { reason + " " + $0 } ?? reason
         status = ServiceStatus(phase: pending ? .needsAttention : .idle,
             tunEnabled: core.running && previousDesired?.tunEnabled == true,
-            systemProxyEnabled: network.recoveryPending && previousDesired?.systemProxyEnabled == true,
+            systemProxyEnabled: network.ownsSystemProxy && previousDesired?.systemProxyEnabled == true,
             coreRunning: core.running, corePID: core.pid,
             message: pending ? failures.joined(separator: " ") : completedMessage,
             recoveryPending: pending)

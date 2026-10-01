@@ -20,6 +20,7 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
             try parserTests()
             try parserDiagnosticTests()
             try yamlTests()
+            try compatibilityTests()
             try configurationTests()
             try recoveryTests()
             try await runLibraryTests()
@@ -28,6 +29,43 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
             print("FAIL — " + String(describing: error))
             exit(1)
         }
+    }
+
+    /// Real-world subscription shapes that must import without losing supported data.
+    static func compatibilityTests() throws {
+        let uuid = "11111111-2222-3333-4444-555555555555"
+        let apostrophe = try SubscriptionParser.parse(Data("""
+        proxies:
+          - {name: Bob's HK, type: ss, server: example.test, port: 443, cipher: aes-256-gcm, password: p}
+          - name: Joe's JP # comment
+            type: ss
+            server: example.test
+            port: 8443
+            cipher: aes-256-gcm
+            password: q
+        """.utf8))
+        try check(apostrophe.nodes.map(\.name) == ["Bob's HK", "Joe's JP"], "apostrophes in plain YAML values are ordinary text")
+        let rules = try SubscriptionParser.parse(Data("""
+        proxies:
+          - {name: A, type: ss, server: example.test, port: 443, cipher: aes-256-gcm, password: p}
+        rules:
+          - GEOIP,CN,DIRECT,no-resolve
+          - IP-CIDR,10.0.0.0/8,DIRECT
+          - DOMAIN-SUFFIX,example.com,A
+          - MATCH,A
+        """.utf8))
+        try check(rules.rules.count == 1 && rules.rules[0].kind == .domainSuffix && !rules.warnings.isEmpty, "unsupported subscription rule types are skipped with a warning")
+        let vless = "vless://" + uuid + "@example.test:443?security=tls&type=tcp&headerType=none&allowInsecure=0&alpn=&sni=example.test#V"
+        let mixed = try SubscriptionParser.parse(Data((vless + "\ntrojan://secret@example.test:443#T\n").utf8))
+        try check(mixed.nodes.count == 1 && mixed.warnings.count == 1, "unsupported schemes in a URI list are skipped with a warning")
+        try check(try SubscriptionParser.parse(Data(b64("trojan://secret@example.test:443#T\n" + vless).utf8)).nodes.count == 1, "Base64 list starting with an unsupported scheme")
+        try rejects("insecure VLESS share link") { _ = try SubscriptionParser.parseURI("vless://" + uuid + "@example.test:443?security=tls&allowInsecure=1") }
+        try rejects("non-default VLESS headerType") { _ = try SubscriptionParser.parseURI("vless://" + uuid + "@example.test:443?headerType=http") }
+        try rejects("list without any supported link") { _ = try SubscriptionParser.parse(Data("trojan://secret@example.test:443#T".utf8)) }
+        let vmess = "vmess://" + b64("{\"v\":\"2\",\"ps\":\"M\",\"add\":\"example.test\",\"port\":\"443\",\"id\":\"" + uuid + "\",\"aid\":\"0\",\"net\":\"tcp\",\"type\":\"none\",\"tls\":\"tls\",\"alpn\":\"\"}")
+        try check(try SubscriptionParser.parseURI(vmess).name == "M", "v2rayN VMess link with empty alpn")
+        let options = try JSONDecoder().decode(AdvancedOptions.self, from: Data(#"{"ipv6":false}"#.utf8))
+        try check(!options.ipv6 && options.mtu == 1_500 && options.tunStack == "mixed", "advanced options decode with missing keys")
     }
 
     static func parserTests() throws {
@@ -127,9 +165,9 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
         }
         try check(root.unsupportedKeys == ["rule-providers"] && !root.localizedDescription.contains(sourceURL), "root dangerous-field diagnostic remains redacted")
         let query = try diagnostic {
-            _ = try SubscriptionParser.parseURI("vless://" + credentialUUID + "@example.test:443?alpn=" + secret)
+            _ = try SubscriptionParser.parseURI("vless://" + credentialUUID + "@example.test:443?spx=" + secret)
         }
-        try check(query.scope == "URI 参数" && query.unsupportedKeys == ["alpn"] && !query.localizedDescription.contains(secret), "URI unsupported parameter reports its name only")
+        try check(query.scope == "URI 参数" && query.unsupportedKeys == ["spx"] && !query.localizedDescription.contains(secret), "URI unsupported parameter reports its name only")
 
         // Public fake Reality fields reproduce the observed JMS schema, without
         // reading or persisting a real subscription response or credential.

@@ -98,7 +98,7 @@ private struct MessageBar: View {
             .background(.green.opacity(0.08))
             .task(id: model.notice) {
                 let shown = model.notice
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(6))
                 if model.notice == shown { model.notice = "" }
             }
         }

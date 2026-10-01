@@ -46,7 +46,7 @@ final class PowerEvents: @unchecked Sendable {
     func stop() {
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         source = nil
-        if notifier != 0 { IODeregisterForSystemPower(&notifier) }
+        if notifier != 0 { IODeregisterForSystemPower(&notifier); notifier = 0 }
         if rootPort != 0 { IOServiceClose(rootPort); rootPort = 0 }
         if let port { IONotificationPortDestroy(port) }
         port = nil

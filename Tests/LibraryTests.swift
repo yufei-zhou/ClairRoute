@@ -172,6 +172,39 @@ private func checkPrivatePermissions(_ directory: URL) throws {
     try vault.expectUnused()
 }
 
+/// Provider-side renames and name clashes must not make every later refresh fail.
+@MainActor private func runSubscriptionChurnTests(directory: URL) async throws {
+    let url = URL(string: "https://example.test/churn")!
+    func payload(_ name: String) -> Data {
+        Data("""
+        proxies:
+          - {name: \(name), type: ss, server: example.test, port: 443, cipher: aes-256-gcm, password: mock-churn}
+        """.utf8)
+    }
+    let fetcher = ScriptedSubscriptionFetcher(url: url, downloads: [
+        SubscriptionDownload(data: payload("HK 01"), userInfo: SubscriptionUserInfo.parse("upload=1; download=2; total=3")),
+        SubscriptionDownload(data: payload("HK 01 New"), userInfo: nil),
+        SubscriptionDownload(data: payload("Manual"), userInfo: nil)])
+    let vault = MemorySecretVault(); vault.rejectAllAccess = true
+    let library = AppLibraryModel(store: ProfileStore(directory: directory, vault: vault), service: fetcher, automaticRefresh: false)
+    try library.saveNode(ProxyNode(name: "Manual", server: "example.test", port: 8443, cipher: "aes-256-gcm", password: "mock-manual"))
+    try library.addSubscription(name: "Churn", url: url.absoluteString, interval: 300)
+    let id = library.subscriptions[0].id
+    try await library.refreshSubscription(id: id)
+    try library.persistRules(library.rules + [RoutingRule(kind: .domainSuffix, value: "churn.test", policy: "HK 01")])
+    try library.setFallbackPolicy("HK 01")
+    try await library.refreshSubscription(id: id)
+    let group = ConfigurationBuilder.sourcePolicy(id)
+    try libraryExpect(library.rules.last?.policy == group && library.fallbackPolicy == group, "rules and fallback for a renamed node move to the subscription group")
+    try libraryExpect(library.subscriptions[0].userInfo != nil, "a refresh without usage headers keeps the last known usage")
+    try await library.refreshSubscription(id: id)
+    try libraryExpect(library.nodes.contains { $0.name == "Manual" && $0.sourceID == nil } && library.nodes.contains { $0.name == "Manual · Churn" && $0.sourceID == id },
+                      "a subscription node that clashes with a manual node is renamed instead of failing")
+    try library.setSubscriptionEnabled(id: id, enabled: false)
+    try libraryExpect(library.fallbackPolicy == "PROXY", "disabling a subscription repoints policies that referenced it")
+    try vault.expectUnused()
+}
+
 @MainActor private func runAtomicFailureTests(directory: URL) throws {
     let vault = MemorySecretVault(); vault.rejectAllAccess = true
     let store = ProfileStore(directory: directory, vault: vault)
@@ -365,6 +398,7 @@ private func runInvalidPlaintextTests(directory: URL) throws {
     defer { try? FileManager.default.removeItem(at: directory) }
     try runPlaintextPersistenceTests(directory: directory.appendingPathComponent("plaintext"))
     try await runSubscriptionPersistenceTests(directory: directory.appendingPathComponent("subscriptions"))
+    try await runSubscriptionChurnTests(directory: directory.appendingPathComponent("churn"))
     try runAtomicFailureTests(directory: directory.appendingPathComponent("atomic"))
     try runMigrationTests(directory: directory.appendingPathComponent("migration"))
     try runMigrationCleanupFailureTests(directory: directory.appendingPathComponent("cleanup"))

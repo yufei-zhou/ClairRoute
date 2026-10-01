@@ -26,7 +26,7 @@ struct RulesView: View {
                             Text(rule.value).font(.system(.body, design: .monospaced)).lineLimit(1).help(rule.value)
                             Text(rule.kind.displayName).font(.caption).foregroundStyle(.secondary)
                         }
-                        Spacer(); Text(rule.policy).font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+                        Spacer(); Text(model.policyLabel(rule.policy)).font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
                         Button("编辑") { editor = rule }
                         Button { model.perform { try library.moveRules(from: IndexSet(integer: index), to: max(0, index - 1)) } } label: { Image(systemName: "arrow.up") }.disabled(index == 0).help("上移")
                         Button { model.perform { try library.moveRules(from: IndexSet(integer: index), to: min(library.rules.count, index + 2)) } } label: { Image(systemName: "arrow.down") }.disabled(index == library.rules.count - 1).help("下移")
@@ -42,7 +42,7 @@ struct RulesView: View {
                 if !library.subscriptionRules.isEmpty {
                     Section("订阅规则") {
                         ForEach(library.subscriptionRules, id: \.id) { rule in
-                            HStack { Text(rule.kind.displayName).foregroundStyle(.secondary); Text(rule.value).lineLimit(1); Spacer(); Text(rule.policy) }.font(.caption)
+                            HStack { Text(rule.kind.displayName).foregroundStyle(.secondary); Text(rule.value).lineLimit(1); Spacer(); Text(model.policyLabel(rule.policy)) }.font(.caption)
                         }
                     }
                 }
@@ -54,11 +54,11 @@ struct RulesView: View {
                 }
                 Spacer()
                 Picker("兜底策略", selection: Binding(get: { library.fallbackPolicy }, set: { value in model.perform { try library.setFallbackPolicy(value) } })) {
-                    ForEach(model.policies, id: \.self) { Text($0).tag($0) }
+                    ForEach(model.policies, id: \.self) { Text(model.policyLabel($0)).tag($0) }
                 }.frame(width: 240)
             }.padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
         }.padding(22)
-        .sheet(item: $editor) { rule in RuleEditorView(rule: rule, policies: model.policies) { value in
+        .sheet(item: $editor) { rule in RuleEditorView(rule: rule, policies: model.policies, label: model.policyLabel) { value in
             var updated = library.rules
             if let index = updated.firstIndex(where: { $0.id == value.id }) { updated[index] = value } else { updated.append(value) }
             try library.persistRules(updated)
@@ -70,6 +70,7 @@ struct RuleEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State var rule: RoutingRule
     let policies: [String]
+    let label: @MainActor (String) -> String
     let save: (RoutingRule) throws -> Void
     @State private var apps: [RunningAppChoice] = []
     @State private var executablePaths: [String] = []
@@ -93,7 +94,7 @@ struct RuleEditorView: View {
                     }
                 }
                 TextField("匹配内容", text: $rule.value, prompt: Text(rule.kind.placeholder))
-                Picker("策略", selection: $rule.policy) { ForEach(policies, id: \.self) { Text($0).tag($0) } }
+                Picker("策略", selection: $rule.policy) { ForEach(policies, id: \.self) { Text(label($0)).tag($0) } }
                 Toggle("启用", isOn: $rule.enabled)
             }
             if !executablePaths.isEmpty {

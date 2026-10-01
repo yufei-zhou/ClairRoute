@@ -49,9 +49,9 @@ public enum SubscriptionParser {
     public static func parse(_ data: Data, sourceID: UUID? = nil) throws -> ParsedSubscription {
         guard !data.isEmpty, data.count <= maximumBytes, var text = String(data: data, encoding: .utf8) else { throw fail("订阅必须是有界 UTF-8 文本。") }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
-        if startsURI(text) { return try parseList(text, sourceID: sourceID) }
+        if looksLikeURIList(text) { return try parseList(text, sourceID: sourceID) }
         let compact = text.filter { !$0.isWhitespace }
-        if isBase64(compact), let decoded = decode64(compact), let list = String(data: decoded, encoding: .utf8), startsURI(list.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        if isBase64(compact), let decoded = decode64(compact), let list = String(data: decoded, encoding: .utf8), looksLikeURIList(list.trimmingCharacters(in: .whitespacesAndNewlines)) {
             return try parseList(list, sourceID: sourceID)
         }
         guard let root = try SafeYAML.parse(text).map else { throw fail("YAML 订阅必须是映射对象。") }
@@ -109,7 +109,14 @@ public enum SubscriptionParser {
                     if !warnings.contains("订阅 MATCH 已忽略；兜底策略由用户设置。") { warnings.append("订阅 MATCH 已忽略；兜底策略由用户设置。") }
                     continue
                 }
-                guard fields.count == 3, let kind = RuleKind(rawValue: fields[0]) else { throw fail("订阅含不支持的规则类型或格式；支持进程、域名和 GEOSITE。") }
+                if fields.count >= 3, RuleKind(rawValue: fields[0]) == nil {
+                    // Provider templates almost always carry GEOIP / IP-CIDR / RULE-SET rules.
+                    // Skip them visibly instead of rejecting the whole subscription.
+                    let note = "订阅中不支持的规则类型（如 GEOIP、IP-CIDR、RULE-SET）已跳过；未命中的流量按你设置的兜底策略处理。"
+                    if !warnings.contains(note) { warnings.append(note) }
+                    continue
+                }
+                guard fields.count == 3, let kind = RuleKind(rawValue: fields[0]) else { throw fail("订阅规则格式无效；支持进程、域名和 GEOSITE。") }
                 var policy = fields[2]
                 if !["DIRECT", "REJECT"].contains(policy), declaredGroups.contains(policy) || policy == "PROXY" { policy = sourcePolicy }
                 guard ["DIRECT", "REJECT", sourcePolicy].contains(policy) || nodeNames.contains(policy) else { throw fail("订阅规则引用了未定义策略。") }
@@ -134,7 +141,12 @@ public enum SubscriptionParser {
     private static func parseList(_ text: String, sourceID: UUID?) throws -> ParsedSubscription {
         let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard !lines.isEmpty, lines.count <= ConfigurationBuilder.maximumNodes else { throw fail("URI 列表需要 1–512 个节点。") }
-        return try checked(ParsedSubscription(nodes: lines.map { try parseURI($0, sourceID: sourceID) }))
+        // Lists often mix in trojan://, hysteria2:// etc. Skip other schemes with a warning,
+        // but still reject malformed links of the supported schemes.
+        let supported = lines.filter(startsURI)
+        guard !supported.isEmpty else { throw fail("仅支持 ss://、vmess:// 和 vless://。") }
+        let warnings = supported.count == lines.count ? [] : ["已跳过 \(lines.count - supported.count) 个不支持的链接（仅支持 ss://、vmess://、vless://）。"]
+        return try checked(ParsedSubscription(nodes: supported.map { try parseURI($0, sourceID: sourceID) }, warnings: warnings))
     }
     private static func checked(_ parsed: ParsedSubscription) throws -> ParsedSubscription {
         let profile = RuntimeProfile(nodes: parsed.nodes, rules: parsed.rules)
@@ -142,6 +154,13 @@ public enum SubscriptionParser {
         return parsed
     }
     private static func startsURI(_ value: String) -> Bool { ["ss://", "vmess://", "vless://"].contains(where: value.hasPrefix) }
+    /// True when the first line is any `scheme://` link (supported or not), i.e. not YAML.
+    private static func looksLikeURIList(_ value: String) -> Bool {
+        let first = value.prefix { !$0.isNewline }
+        guard let separator = first.range(of: "://") else { return false }
+        let scheme = first[..<separator.lowerBound]
+        return !scheme.isEmpty && scheme.utf8.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 43 || $0 == 45 || $0 == 46 }
+    }
 
     private static func parseSS(_ uri: String, sourceID: UUID?) throws -> ProxyNode {
         guard let components = URLComponents(string: uri) else { throw fail("Shadowsocks URI 无效。") }
@@ -182,7 +201,9 @@ public enum SubscriptionParser {
     private static func parseVMess(_ uri: String, sourceID: UUID?) throws -> ProxyNode {
         let body = String(uri.dropFirst(8))
         guard let bytes = decode64(body), let map = try SafeYAML.parse(bytes).map else { throw fail("VMess URI 必须包含 Base64 JSON。") }
-        try keys(map, allowed: ["v", "ps", "add", "port", "id", "aid", "scy", "net", "type", "host", "path", "tls", "sni", "fp"], scope: "VMess URI")
+        try keys(map, allowed: ["v", "ps", "add", "port", "id", "aid", "scy", "net", "type", "host", "path", "tls", "sni", "fp", "alpn"], scope: "VMess URI")
+        // v2rayN always writes "alpn"; only the empty (default) value is meaningful to us.
+        guard try string(map, "alpn").isEmpty else { throw fail("VMess URI 暂不支持自定义 alpn。") }
         let version = try string(map, "v", fallback: "2")
         guard ["", "2"].contains(version), ["", "none"].contains(try string(map, "type", fallback: "none")) else { throw fail("VMess URI 版本或伪装类型不受支持。") }
         let tls = try string(map, "tls")
@@ -199,7 +220,11 @@ public enum SubscriptionParser {
 
     private static func parseVLESS(_ uri: String, sourceID: UUID?) throws -> ProxyNode {
         guard let components = URLComponents(string: uri), let uuid = components.user, components.password == nil, let rawHost = components.host, let port = components.port, components.path.isEmpty || components.path == "/" else { throw fail("VLESS URI 地址、UUID 或端口无效。") }
-        let query = try queryItems(components, allowed: ["encryption", "security", "type", "flow", "sni", "fp", "pbk", "sid", "path", "host", "serviceName"])
+        let query = try queryItems(components, allowed: ["encryption", "security", "type", "flow", "sni", "fp", "pbk", "sid", "path", "host", "serviceName", "headerType", "allowInsecure", "alpn"])
+        // Common share-link parameters are accepted only at their default values, so nothing is silently dropped.
+        guard (query["headerType"] ?? "none") == "none",
+              ["0", "false"].contains(query["allowInsecure"] ?? "0"),
+              (query["alpn"] ?? "").isEmpty else { throw fail("VLESS URI 的 headerType / allowInsecure / alpn 只支持默认值。") }
         guard query["encryption"] == nil || query["encryption"] == "none" else { throw fail("VLESS encryption 仅支持 none。") }
         let security = query["security"] ?? "none"
         guard ["none", "tls", "reality"].contains(security) else { throw fail("VLESS security 无效。") }

@@ -47,7 +47,7 @@ struct OverviewView: View {
                 .pickerStyle(.segmented)
                 .disabled(editingLocked)
                 LabeledContent("当前节点", value: library.selectedNode ?? library.nodes.first?.name ?? "尚未添加")
-                LabeledContent("规则", value: "\(library.rules.count) 条自定义规则 · 其余流量 \(library.fallbackPolicy)")
+                LabeledContent("规则", value: "\(library.rules.count) 条自定义规则 · 其余流量 \(model.policyLabel(library.fallbackPolicy))")
             } header: {
                 Text("出站策略")
             } footer: {

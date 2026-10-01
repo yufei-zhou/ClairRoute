@@ -32,6 +32,8 @@ final class NetworkSettingsManager {
     private(set) var lastRestorationNotice: String?
 
     var recoveryPending: Bool { !journal.leases.isEmpty }
+    var ownsDNS: Bool { journal.leases.values.contains { $0.protocolType == "DNS" } }
+    var ownsSystemProxy: Bool { journal.leases.values.contains { $0.protocolType != "DNS" } }
     var observationAvailable: Bool { observation != nil }
 
     init(stateDirectory: URL) throws {
@@ -72,7 +74,14 @@ final class NetworkSettingsManager {
 
     private func transact(tunEnabled: Bool, systemProxyEnabled: Bool, endingSession: Bool) throws {
         let prefs = try preferences()
-        guard SCPreferencesLock(prefs, false) else { throw scError("lock network preferences") }
+        // Another app (e.g. System Settings) may hold the lock briefly; wait up to ~3 s.
+        var locked = SCPreferencesLock(prefs, false)
+        for _ in 0..<30 where !locked {
+            Thread.sleep(forTimeInterval: 0.1)
+            SCPreferencesSynchronize(prefs)
+            locked = SCPreferencesLock(prefs, false)
+        }
+        guard locked else { throw scError("lock network preferences") }
         defer { SCPreferencesUnlock(prefs) }
         SCPreferencesSynchronize(prefs)
         let allServices = (SCNetworkServiceCopyAll(prefs) as? [SCNetworkService]) ?? []

@@ -77,14 +77,15 @@ private final class RecoveryGuardRuntime: @unchecked Sendable {
         let transaction = try safety.lock(allowRecoveryMarker: true)
         defer { transaction.release() }
         var failure: Error?
-        let core = CoreSupervisor(clientRequirement: clientRequirement, didExit: {})
-        do { try core.recoverPreviousProcess() }
-        catch { failure = error }
+        // Restore DNS/proxy first, while a surviving core can still answer on loopback.
         do {
             let network = try NetworkSettingsManager(stateDirectory: HelperSecurity.state)
             try network.recoverIfNeeded()
             if network.recoveryPending { throw HelperFailure.refused("Owned network settings are still pending recovery.") }
-        } catch { if failure == nil { failure = error } }
+        } catch { failure = error }
+        let core = CoreSupervisor(clientRequirement: clientRequirement, didExit: {})
+        do { try core.recoverPreviousProcess() }
+        catch { if failure == nil { failure = error } }
         if let failure { throw failure }
         try SafetyFile.lease.remove()
         try SafetyFile.marker.remove()
