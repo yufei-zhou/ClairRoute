@@ -1,0 +1,25 @@
+ClairRoute
+
+Bundled engine: MetaCubeX/mihomo v1.19.31 (darwin-arm64)
+Official source: https://github.com/MetaCubeX/mihomo/tree/v1.19.31
+Official release: https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.31
+License: GNU General Public License version 3; see mihomo-LICENSE.
+The upstream project separately requests that unrelated downstream projects do not
+include the word "mihomo" in their product name. ClairRoute is an independent local
+client and is not affiliated with MetaCubeX.
+
+The engine is unmodified except for local executable code signing. The upstream
+archive digest, original executable digest and locally signed executable digest are
+tracked separately. A signed CoreManifest.json seals the executable used at runtime.
+
+This application is delivered for local development, without telemetry or advertising.
+Public distribution requires a separate release review, including GPL corresponding
+source/build materials and the application's signing/notarization requirements.
+
+Bundled domain classification data: MetaCubeX/meta-rules-dat, geosite.dat
+Official source: https://github.com/MetaCubeX/meta-rules-dat
+Snapshot: 2026-09-30T01:25:44Z, GitHub asset 599699109
+SHA256: bff76f6b4d87c3a4c7d9612b926e762b21ba4fe2c5bf8c5a43af25fe8de71b7e
+Repository license: GNU GPL-3.0 (same unmodified license text in mihomo-LICENSE).
+The data is pinned and packaged locally; automatic root-side downloads are disabled.
+Consult upstream for the component rule-list sources and their notices.

@@ -1,0 +1,23 @@
+.DS_Store
+.build/
+*.xcuserstate
+xcuserdata/
+Vendor/mihomo
+Resources/mihomo
+Resources/CoreManifest.json
+*.p12
+*.key
+*.pem
+*.pfx
+*.mobileprovision
+*.log
+.env
+.env.*
+!.env.example
+DerivedData/
+*.xcarchive
+# Local runtime configuration contains plaintext credentials.
+/profile.json
+/config.json
+/config.yaml
+/config.yml
