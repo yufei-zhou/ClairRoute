@@ -73,7 +73,7 @@ private struct StatusBadge: View {
     }
 }
 
-/// Import warnings remain visible until dismissed or superseded by another operation.
+/// Shows the latest error (until dismissed) or a short-lived notice.
 private struct MessageBar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var library: AppLibraryModel
@@ -97,6 +97,11 @@ private struct MessageBar: View {
             }
             .font(.callout).padding(.horizontal, 20).padding(.vertical, 10)
             .background(.blue.opacity(0.08))
+            .task(id: model.notice) {
+                let shown = model.notice
+                try? await Task.sleep(for: .seconds(8))
+                if model.notice == shown { model.notice = "" }
+            }
         }
     }
 }

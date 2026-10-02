@@ -110,11 +110,11 @@ extension LibrarySnapshot {
         let activeNodes = allNodes.filter { $0.sourceID.map(enabled.contains) ?? true }
         let activeRules = (rules + subscriptionRules.filter { $0.sourceID.map(enabled.contains) ?? false }).map {
             var rule = $0
-            if unavailable.contains(rule.policy) { rule.policy = "REJECT" }
+            if unavailable.contains(rule.policy) { rule.policy = "DIRECT" }
             return rule
         }
         return RuntimeProfile(nodes: activeNodes, mode: mode, rules: activeRules,
-                              fallbackPolicy: unavailable.contains(fallbackPolicy) ? "REJECT" : fallbackPolicy,
+                              fallbackPolicy: unavailable.contains(fallbackPolicy) ? "DIRECT" : fallbackPolicy,
                               selectedNode: hasDisabledSelection ? nil : selectedNode, advanced: advanced)
     }
 

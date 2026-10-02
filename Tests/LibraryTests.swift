@@ -203,8 +203,8 @@ private func checkPrivatePermissions(_ directory: URL) throws {
     try library.setSubscriptionEnabled(id: id, enabled: false)
     try libraryExpect(library.fallbackPolicy == group && library.rules.last?.policy == group,
                       "disabling a subscription preserves saved targets")
-    try libraryExpect(try library.runtimeProfile(mode: .rule).fallbackPolicy == "REJECT",
-                      "disabled subscription targets reject in the transient runtime profile")
+    try libraryExpect(try library.runtimeProfile(mode: .rule).fallbackPolicy == "DIRECT",
+                      "disabled subscription targets go direct in the transient runtime profile")
     try library.setSubscriptionEnabled(id: id, enabled: true)
     try libraryExpect(try library.runtimeProfile(mode: .rule).fallbackPolicy == group,
                       "reenabling restores the saved targets")
@@ -304,8 +304,8 @@ private func checkPrivatePermissions(_ directory: URL) throws {
     try reloaded.setSubscriptionEnabled(id: id, enabled: false)
     try reloaded.selectNode(manual.name)
     let disabled = try reloaded.runtimeProfile(mode: .rule)
-    try libraryExpect(disabled.nodes.map(\.name) == [manual.name] && disabled.rules.map(\.policy) == ["REJECT", "REJECT"] && disabled.fallbackPolicy == "REJECT",
-                      "unavailable rule and fallback targets reject instead of switching to another node")
+    try libraryExpect(disabled.nodes.map(\.name) == [manual.name] && disabled.rules.map(\.policy) == ["DIRECT", "DIRECT"] && disabled.fallbackPolicy == "DIRECT",
+                      "unavailable rule and fallback targets go direct instead of switching to another node")
     try libraryExpect(reloaded.rules == rules && reloaded.fallbackPolicy == group,
                       "runtime projection does not mutate saved preferences")
     try vault.expectUnused()
