@@ -34,7 +34,7 @@ struct LibraryView: View {
                             }
                             Spacer()
                             if library.refreshing.contains(subscription.id) { ProgressView().controlSize(.small) }
-                            Button("刷新") { Task { do { try await library.refreshSubscription(id: subscription.id); model.notice = library.notice ?? "订阅已更新。" } catch { model.error = error.localizedDescription } } }.disabled(library.refreshing.contains(subscription.id))
+                            Button("刷新") { Task { await model.refreshSubscription(subscription.id) } }.disabled(library.refreshing.contains(subscription.id))
                             Button("设置") { editingSubscription = subscription }
                             Button(role: .destructive) { subscriptionToDelete = subscription } label: { Image(systemName: "trash") }.help("删除订阅及其节点")
                         }.padding(10).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
@@ -44,8 +44,6 @@ struct LibraryView: View {
             if library.nodes.isEmpty {
                 ContentUnavailableView {
                     Label("还没有节点", systemImage: "server.rack")
-                } description: {
-                    Text("手动添加节点，粘贴 ss:// / vmess:// / vless:// 链接或 Clash YAML，或者添加一个 HTTPS 订阅。")
                 } actions: {
                     Button("导入 URI / YAML") { importError = nil; importing = true }
                     Button("添加订阅") { subscriptionSheet = true }
@@ -57,17 +55,17 @@ struct LibraryView: View {
                             Image(systemName: library.selectedNode == node.name ? "checkmark.circle.fill" : "circle").foregroundStyle(library.selectedNode == node.name ? Color.accentColor : .secondary)
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(node.name).font(.headline)
+                                Text(model.policyLabel(node.name)).font(.headline)
                                 Text("\(node.type.rawValue.uppercased()) · \(node.server):\(node.port)").font(.caption).foregroundStyle(.secondary)
                             }.accessibilityElement(children: .combine)
                             Spacer()
                             Text(model.delays[node.name] ?? "—").monospacedDigit().font(.caption).frame(width: 70)
                                 .accessibilityLabel("延迟：" + (model.delays[node.name] ?? "尚未测速"))
-                            Button("测速") { Task { await model.measureDelay(node.name) } }.disabled(!model.status.coreRunning)
+                            Button("测速") { Task { await model.measureDelay(node.name) } }.disabled(!model.status.coreRunning || !model.nodeIsEnabled(node))
                                 .accessibilityLabel("测速 " + node.name)
                                 .accessibilityIdentifier("node.delay." + node.id.uuidString)
-                            Button(library.selectedNode == node.name ? "使用中" : "使用") { Task { await model.chooseNode(node.name) } }
-                                .disabled(model.busy || library.selectedNode == node.name)
+                            Button(library.selectedNode == node.name ? "已选择" : "使用") { Task { await model.chooseNode(node.name) } }
+                                .disabled(model.busy || library.selectedNode == node.name || !model.nodeIsEnabled(node))
                                 .accessibilityLabel("选择 " + node.name)
                                 .accessibilityValue(library.selectedNode == node.name ? "已选中" : "未选中")
                                 .accessibilityIdentifier("node.select." + node.id.uuidString)
@@ -90,13 +88,11 @@ struct LibraryView: View {
             }
         }.padding(22)
         .sheet(item: $editor) { node in NodeEditorView(node: node) { value in
-            try library.saveNode(value); model.notice = "节点已保存"
+            try library.saveNode(value); model.error = nil
         } }
         .sheet(isPresented: $importing) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("导入节点").font(.title2.bold())
-                Text("粘贴 ss:// / vmess:// / vless:// 链接（每行一个，也支持 Base64 列表）或 Clash / mihomo YAML。全部在本机解析，不上传。")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 TextEditor(text: $importText).font(.system(.body, design: .monospaced)).frame(height: 250).border(.quaternary)
                 if let importError { Text(importError).foregroundStyle(.red).textSelection(.enabled) }
                 HStack {
@@ -112,7 +108,7 @@ struct LibraryView: View {
                         }
                     }
                     Spacer(); Button("取消") { importText = ""; importing = false }
-                    Button("导入") { do { try library.importText(importText); importText = ""; importing = false } catch { importError = error.localizedDescription } }.buttonStyle(.borderedProminent)
+                    Button("导入") { do { try library.importText(importText); model.error = nil; importText = ""; importing = false } catch { importError = error.localizedDescription } }.buttonStyle(.borderedProminent)
                 }
             }.padding(24).frame(width: 630)
         }
@@ -149,8 +145,6 @@ struct SubscriptionEditor: View {
                 if subscription == nil { SecureField("HTTPS 订阅 URL", text: $url, prompt: Text("https://")) }
                 Stepper("刷新间隔：\(hours) 小时", value: $hours, in: 1...720)
             }
-            Text("订阅地址只保存在本机配置文件中，由界面进程直接下载，不经过任何在线转换服务。自动刷新只更新节点列表，不会自动改变正在运行的会话。")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let error { Text(error).foregroundStyle(.red) }
             HStack {
                 Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)

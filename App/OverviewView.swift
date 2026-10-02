@@ -17,7 +17,9 @@ struct OverviewView: View {
                         .frame(width: 40)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(model.phaseLabel).font(.title3.weight(.semibold))
-                        Text(model.statusDetail).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                        if model.needsAttention || (model.signed && !model.helperConnected) {
+                            Text(model.statusDetail).font(.callout).textSelection(.enabled)
+                        }
                     }
                     Spacer()
                     if model.busy { ProgressView().controlSize(.small) }
@@ -29,11 +31,9 @@ struct OverviewView: View {
             Section("流量接管") {
                 Toggle(isOn: Binding(get: { model.status.tunEnabled }, set: { value in Task { await model.setTUN(value) } })) {
                     Text("增强模式（TUN）")
-                    Text("在网络层接管所有 TCP / UDP 流量，再按规则分流。日常推荐使用。")
                 }
                 Toggle(isOn: Binding(get: { model.status.systemProxyEnabled }, set: { value in Task { await model.setSystemProxy(value) } })) {
                     Text("系统代理")
-                    Text("只影响遵循 macOS 代理设置的应用（如浏览器）。开启 TUN 时一般不需要。")
                 }
             }
             .disabled(!model.signed || editingLocked)
@@ -46,12 +46,10 @@ struct OverviewView: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(editingLocked)
-                LabeledContent("当前节点", value: library.selectedNode ?? library.nodes.first?.name ?? "尚未添加")
+                LabeledContent("当前节点", value: (library.selectedNode ?? library.nodes.first(where: model.nodeIsEnabled)?.name).map(model.policyLabel) ?? "尚未添加")
                 LabeledContent("规则", value: "\(library.rules.count) 条自定义规则 · 其余流量 \(model.policyLabel(library.fallbackPolicy))")
             } header: {
                 Text("出站策略")
-            } footer: {
-                Text("规则：按规则列表分流；全局：全部走代理；直连：全部不走代理。直连不会关闭接管，要停止请关闭上方开关。")
             }
 
             Section("后台服务") {
@@ -71,8 +69,6 @@ struct OverviewView: View {
                 Button("开始 120 秒 TUN 验收") { Task { await model.startLimitedTrial() } }
             } header: {
                 Text("限时验收")
-            } footer: {
-                Text("首次使用或更换网络环境时，先做一次限时验收：120 秒后由独立的恢复服务自动还原网络，即使界面或 Helper 崩溃也一样。")
             }
             .disabled(!model.signed || editingLocked || model.status.coreRunning)
         }

@@ -9,6 +9,7 @@ import Combine
     private var generation: UInt64 = 0
     private var polling: Task<Void, Never>?
     private var libraryObservation: AnyCancellable?
+    private var libraryNoticeObservation: AnyCancellable?
     private var attemptedMutation = false
     private var unconfirmed = false
     private var activeTrialMode = false
@@ -60,21 +61,31 @@ import Combine
         let modeName = switch mode { case .rule: "规则模式"; case .global: "全局模式"; case .direct: "直连模式" }
         return (takeover.isEmpty ? "内核运行中" : takeover.joined(separator: " + ")) + " · " + modeName + (activeTrialMode ? " · 限时验收中" : "")
     }
-    /// Policies a rule or the fallback may use: built-ins, each active subscription's group, and active nodes.
+    /// Keep saved, disabled policies visible so editing never silently replaces them.
     var policies: [String] {
-        let active = Set(library.subscriptions.filter(\.enabled).map(\.id))
-        let nodes = library.nodes.filter { $0.sourceID.map(active.contains) ?? true }
-        let groups = library.subscriptions.filter { subscription in active.contains(subscription.id) && nodes.contains { $0.sourceID == subscription.id } }
-        return ["PROXY", "DIRECT", "REJECT"] + groups.map { ConfigurationBuilder.sourcePolicy($0.id) } + nodes.map(\.name)
+        let groups = library.subscriptions.filter { subscription in library.nodes.contains { $0.sourceID == subscription.id } }
+        return ["PROXY", "DIRECT", "REJECT"] + groups.map { ConfigurationBuilder.sourcePolicy($0.id) } + library.nodes.map(\.name)
     }
     /// Human-readable name for a policy; subscription groups are shown by subscription name.
     func policyLabel(_ policy: String) -> String {
-        if let subscription = library.subscriptions.first(where: { ConfigurationBuilder.sourcePolicy($0.id) == policy }) { return "订阅：" + subscription.name }
+        if let subscription = library.subscriptions.first(where: { ConfigurationBuilder.sourcePolicy($0.id) == policy }) {
+            return "订阅：" + subscription.name + (subscription.enabled ? "" : "（已停用）")
+        }
+        if let node = library.nodes.first(where: { $0.name == policy }), !nodeIsEnabled(node) { return policy + "（已停用）" }
         return policy
+    }
+    func nodeIsEnabled(_ node: NodeMetadata) -> Bool {
+        guard let source = node.sourceID else { return true }
+        return library.subscriptions.contains { $0.id == source && $0.enabled }
     }
 
     init() {
         libraryObservation = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        // Import, editor and automatic-refresh results all use the same visible channel.
+        libraryNoticeObservation = library.$notice.sink { [weak self] message in
+            guard let self, let message, !message.isEmpty else { return }
+            self.notice = message
+        }
         client.onDisconnect = { [weak self] in
             guard let self else { return }
             self.helperConnected = false
@@ -243,7 +254,12 @@ import Combine
             notice = library.notice ?? (status.coreRunning ? "已保存；点击「应用配置」让运行中的会话生效。" : "已保存。")
         } catch { self.error = error.localizedDescription }
     }
-    func dismissError() { error = nil; library.clearMessages() }
+    func refreshSubscription(_ id: UUID) async {
+        dismissError()
+        do { try await library.refreshSubscription(id: id) }
+        catch { self.error = error.localizedDescription }
+    }
+    func dismissError() { error = nil; notice = ""; library.clearMessages() }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {

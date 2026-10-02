@@ -11,7 +11,7 @@ struct RulesView: View {
             HStack {
                 Button("添加规则", systemImage: "plus") { editor = RoutingRule(kind: .domainSuffix, value: "", policy: "PROXY") }
                 Spacer()
-                Text("从上到下依次匹配，第一条命中的规则生效。可拖动排序。").font(.callout).foregroundStyle(.secondary)
+                Text("从上到下，首条命中生效").font(.callout)
             }
             List {
                 ForEach(Array(library.rules.enumerated()), id: \.element.id) { index, rule in
@@ -50,7 +50,6 @@ struct RulesView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("其余流量（MATCH）").font(.body.weight(.semibold))
-                    Text("没有命中任何规则的连接使用此策略。").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Picker("兜底策略", selection: Binding(get: { library.fallbackPolicy }, set: { value in model.perform { try library.setFallbackPolicy(value) } })) {

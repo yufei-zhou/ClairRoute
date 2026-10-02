@@ -34,16 +34,28 @@ final class CoreSupervisor {
     var running: Bool { process?.running ?? (processRecord?.identity.stillMatches ?? false) }
     var pid: Int32? { running ? (process?.pid ?? processRecord?.identity.pid) : nil }
     var recoveryPending: Bool { ownedInterfaceIndex != nil || processRecord != nil }
+    var ownsTUNInterface: Bool {
+        guard let ownedInterfaceIndex else { return false }
+        return if_nametoindex(AppConstants.tunInterfaceName) == ownedInterfaceIndex
+    }
 
     init(clientRequirement: String, didExit: @escaping @Sendable () -> Void) {
         self.clientRequirement = clientRequirement
         self.didExit = didExit
     }
 
-    func recoverPreviousProcess() throws {
-        guard let record = try CoreProcessJournal.load() else { return }
+    /// Inspect ownership without stopping a surviving DNS server. Restoration
+    /// must release the system's loopback consumers before terminating the core.
+    func adoptPreviousProcess() throws {
+        guard process == nil, processRecord == nil,
+              let record = try CoreProcessJournal.load() else { return }
         processRecord = record
         ownedInterfaceIndex = record.interfaceIndex
+    }
+
+    func recoverPreviousProcess() throws {
+        try adoptPreviousProcess()
+        guard let record = processRecord else { return }
         if record.identity.stillMatches {
             kill(record.identity.pid, SIGTERM)
             let deadline = ProcessInfo.processInfo.systemUptime + 3

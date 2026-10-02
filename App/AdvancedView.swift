@@ -11,8 +11,6 @@ struct AdvancedView: View {
             VStack(alignment: .leading, spacing: 20) {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("只允许修改 DNS、IPv6、日志级别、TCP 并发和 TUN 协议栈 / MTU。监听端口、控制接口、文件路径和脚本不能在这里覆盖。")
-                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         YAMLEditor(text: $yaml).frame(height: 270)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
@@ -52,8 +50,6 @@ struct AdvancedView: View {
 
                 GroupBox {
                     HStack {
-                        Text("先恢复网络、删除本应用的节点和订阅，再打开终端请求管理员授权移除系统组件。签名证书和项目源码会保留。")
-                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         Spacer()
                         Button("完全卸载…", role: .destructive) { confirmUninstall = true }
                             .disabled(model.busy || !model.signed || library.migrationRequired || library.pendingSecretCleanup > 0)

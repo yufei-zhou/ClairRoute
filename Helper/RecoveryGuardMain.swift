@@ -76,17 +76,14 @@ private final class RecoveryGuardRuntime: @unchecked Sendable {
         try marker.helper.terminateIfMatching()
         let transaction = try safety.lock(allowRecoveryMarker: true)
         defer { transaction.release() }
-        var failure: Error?
         // Restore DNS/proxy first, while a surviving core can still answer on loopback.
-        do {
-            let network = try NetworkSettingsManager(stateDirectory: HelperSecurity.state)
-            try network.recoverIfNeeded()
-            if network.recoveryPending { throw HelperFailure.refused("Owned network settings are still pending recovery.") }
-        } catch { failure = error }
+        // On failure leave that core alive; the guard's next tick retries using
+        // the durable journals instead of stranding loopback DNS/proxy clients.
+        let network = try NetworkSettingsManager(stateDirectory: HelperSecurity.state)
+        try network.recoverIfNeeded()
+        if network.recoveryPending { throw HelperFailure.refused("Owned network settings are still pending recovery.") }
         let core = CoreSupervisor(clientRequirement: clientRequirement, didExit: {})
-        do { try core.recoverPreviousProcess() }
-        catch { if failure == nil { failure = error } }
-        if let failure { throw failure }
+        try core.recoverPreviousProcess()
         try SafetyFile.lease.remove()
         try SafetyFile.marker.remove()
         log.notice("The independent limited trial rollback completed.")

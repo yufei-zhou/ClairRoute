@@ -56,7 +56,7 @@ public enum SafeYAML {
                 guard raw.utf8.count <= 65_536, !raw.contains("\t"), !raw.contains("\r"), !raw.contains("\0") else {
                     throw YAMLParseError(line: number, reason: "不支持制表符、控制字符或超长行")
                 }
-                var text = Self.uncomment(String(raw)).trimmingCharacters(in: .whitespaces)
+                var text = Self.uncomment(String(raw), following: pending?.text).trimmingCharacters(in: .whitespaces)
                 if index == 0 { text = text.trimmingCharacters(in: CharacterSet(charactersIn: "\u{FEFF}")) }
                 if text.isEmpty { continue }
                 if text == "---" {
@@ -148,61 +148,91 @@ public enum SafeYAML {
         func error(_ reason: String) -> YAMLParseError { YAMLParseError(line: position < lines.count ? lines[position].number : (lines.last?.number ?? 1), reason: reason) }
 
         static func separator(_ text: String) -> String.Index? {
-            var quote: Character?; var escaped = false; var nesting = 0
-            for index in text.indices {
-                let c = text[index]
-                if let q = quote {
-                    if escaped { escaped = false; continue }
-                    if q == "\"", c == "\\" { escaped = true; continue }
-                    if c == q { quote = nil }; continue
-                }
-                if Self.opensQuote(text, index) { quote = c }
-                else if c == "[" || c == "{" { nesting += 1 }
-                else if c == "]" || c == "}" { nesting -= 1 }
-                else if c == ":", nesting == 0 {
-                    let next = text.index(after: index)
-                    if next == text.endIndex || text[next].isWhitespace { return index }
-                }
-            }
-            return nil
+            var scanner = ScalarScanner()
+            return scanner.scan(text).separator
         }
-        static func uncomment(_ text: String) -> String {
-            var quote: Character?; var escaped = false
-            for index in text.indices {
-                let c = text[index]
-                if let q = quote {
-                    if escaped { escaped = false; continue }
-                    if q == "\"", c == "\\" { escaped = true; continue }
-                    if c == q { quote = nil }; continue
-                }
-                if Self.opensQuote(text, index) { quote = c }
-                if c == "#", index == text.startIndex || text[text.index(before: index)].isWhitespace { return String(text[..<index]) }
-            }
-            return text
-        }
-        /// A quote only starts a quoted scalar at the beginning of a token, so the
-        /// apostrophe in a plain value such as `Bob's HK` is ordinary text.
-        static func opensQuote(_ text: String, _ index: String.Index) -> Bool {
-            let c = text[index]
-            guard c == "\"" || c == "'" else { return false }
-            guard index != text.startIndex else { return true }
-            let previous = text[text.index(before: index)]
-            return previous.isWhitespace || "[{,:-".contains(previous) || previous == c
+        static func uncomment(_ text: String, following prefix: String? = nil) -> String {
+            var scanner = ScalarScanner()
+            if let prefix { _ = scanner.scan(prefix) }
+            guard let comment = scanner.scan(text).comment else { return text }
+            return String(text[..<comment])
         }
         static func flowBalance(_ text: String) -> Int {
-            var quote: Character?; var escaped = false; var balance = 0
-            for index in text.indices {
-                let c = text[index]
-                if let q = quote {
-                    if escaped { escaped = false; continue }
-                    if q == "\"", c == "\\" { escaped = true; continue }
-                    if c == q { quote = nil }; continue
-                }
-                if Self.opensQuote(text, index) { quote = c }
-                else if c == "[" || c == "{" { balance += 1 }
-                else if c == "]" || c == "}" { balance -= 1 }
+            var scanner = ScalarScanner()
+            _ = scanner.scan(text)
+            return scanner.frames.count - 1
+        }
+
+        /// Track whole scalars, not adjacent characters: whitespace, apostrophes
+        /// and quotation marks inside a plain scalar do not start a quoted one.
+        /// All three structural scans share this state so comments and flow
+        /// delimiters have the same meaning when a flow collection spans lines.
+        private struct ScalarScanner {
+            enum Kind { case block, mapping, sequence }
+            enum Mode { case start, plain, singleQuoted, doubleQuoted, complete }
+            struct Frame {
+                let kind: Kind
+                var readingKey = true
+                var mode = Mode.start
             }
-            return balance
+            struct Markers {
+                var separator: String.Index?
+                var comment: String.Index?
+            }
+            var frames = [Frame(kind: .block)]
+            var escaped = false
+
+            mutating func scan(_ text: String) -> Markers {
+                var markers = Markers()
+                var index = text.startIndex
+                while index < text.endIndex {
+                    let c = text[index], next = text.index(after: index)
+                    let top = frames.count - 1
+                    switch frames[top].mode {
+                    case .singleQuoted:
+                        if c == "'" {
+                            if next < text.endIndex, text[next] == "'" {
+                                index = text.index(after: next); continue
+                            }
+                            frames[top].mode = .complete
+                        }
+                    case .doubleQuoted:
+                        if escaped { escaped = false }
+                        else if c == "\\" { escaped = true }
+                        else if c == "\"" { frames[top].mode = .complete }
+                    default:
+                        if c == "#", index == text.startIndex || text[text.index(before: index)].isWhitespace {
+                            markers.comment = index; return markers
+                        }
+                        if c.isWhitespace { index = next; continue }
+                        let separated = next == text.endIndex || text[next].isWhitespace
+                        if c == ":", frames[top].readingKey,
+                           frames[top].kind == .mapping || (frames[top].kind == .block && separated) {
+                            if top == 0 { markers.separator = index }
+                            frames[top].readingKey = false; frames[top].mode = .start
+                        } else if c == ",", top > 0 {
+                            frames[top].readingKey = frames[top].kind == .mapping
+                            frames[top].mode = .start
+                        } else if (c == "]" || c == "}"), top > 0 {
+                            frames.removeLast()
+                        } else if c == "-", top == 0, frames[top].mode == .start, separated {
+                            // A block sequence marker precedes, rather than starts, its scalar.
+                        } else if frames[top].mode == .start {
+                            switch c {
+                            case "'": frames[top].mode = .singleQuoted
+                            case "\"": frames[top].mode = .doubleQuoted
+                            case "[", "{":
+                                frames[top].mode = .complete
+                                frames.append(Frame(kind: c == "{" ? .mapping : .sequence,
+                                                    readingKey: c == "{"))
+                            default: frames[top].mode = .plain
+                            }
+                        }
+                    }
+                    index = next
+                }
+                return markers
+            }
         }
     }
 

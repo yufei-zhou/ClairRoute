@@ -203,6 +203,38 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
         try check(nested.map?["rules"]?.array?.first?.text == "DOMAIN,example.test,PROXY", "commas preserved in plain rule")
         try check(try SafeYAML.parse(#"{"number": 443, "false": false, "null": null}"#).map?["number"]?.int == 443, "JSON is YAML subset")
         try check(try SafeYAML.parse("short-id: 0123").map?["short-id"]?.text == "0123", "leading zeroes in credentials are preserved")
+        let scalarCases: [(String, String)] = [
+            ("ab''cd", "ab''cd"),
+            (#"ab""cd"#, #"ab""cd"#),
+            ("Bob 'HK", "Bob 'HK"),
+            (#"Bob "HK"#, #"Bob "HK"#),
+            ("ab:'cd", "ab:'cd"),
+            (#"ab-"cd"#, #"ab-"cd"#),
+            ("'ab''cd # [credential] }'", "ab'cd # [credential] }"),
+            (#""ab\"cd # [credential] }""#, #"ab"cd # [credential] }"#)
+        ]
+        for (source, expected) in scalarCases {
+            let block = try SafeYAML.parse("password: \(source) # discarded\nnext: intact")
+            try check(block.map?["password"]?.text == expected && block.map?["next"]?.text == "intact", "block scalar quote boundaries preserve credentials and strip comments")
+            let flow = try SafeYAML.parse("node: {password: \(source), next: intact} # discarded")
+            try check(flow.map?["node"]?.map?["password"]?.text == expected && flow.map?["node"]?.map?["next"]?.text == "intact", "flow scalar quote boundaries preserve credentials and closing delimiters")
+            let sequence = try SafeYAML.parse("values:\n  - \(source) # discarded\n  - intact")
+            try check(sequence.map?["values"]?.array == [.string(expected), .string("intact")], "sequence scalar quote boundaries match block and flow maps")
+        }
+        let multiline = try SafeYAML.parse(#"""
+        node: {name: Demo,
+          password: ab''cd, # discarded
+          tags: [ab ""literal,
+            'can''t # [ ]', "a \"quote\" # }"]}
+        """#)
+        try check(multiline.map?["node"]?.map?["password"]?.text == "ab''cd", "multiline flow maps retain their scalar context across comments")
+        try check(multiline.map?["node"]?.map?["tags"]?.array == [.string(#"ab ""literal"#), .string("can't # [ ]"), .string(#"a "quote" # }"#)], "mixed plain and quoted flow sequence values agree on delimiters")
+        let continuedPlain = try SafeYAML.parse("node: {password: ab\n  'cd # discarded\n  , next: intact}")
+        try check(continuedPlain.map?["node"]?.map?["password"]?.text == "ab 'cd", "continuation lines cannot turn part of a plain scalar into a quoted scalar")
+        try check(try SafeYAML.parse(#"{"a'key":"can''t # ] }","other":true}"#).map?["a'key"]?.text == "can''t # ] }", "compact JSON separators remain valid next to quoted strings")
+        try check(try SafeYAML.parse("password: ab[cd{ef # discarded").map?["password"]?.text == "ab[cd{ef", "block plain brackets do not create flow collections")
+        try rejects("unclosed quoted flow scalar") { _ = try SafeYAML.parse("node: {password: 'ab''cd}") }
+        try rejects("characters following a quoted scalar") { _ = try SafeYAML.parse("password: 'ab'cd # discarded") }
         try rejects("duplicate JSON/YAML keys") { _ = try SafeYAML.parse("a: 1\na: 2") }
         try rejects("YAML anchors") { _ = try SafeYAML.parse("a: &secret value\nb: *secret") }
         try rejects("YAML tags") { _ = try SafeYAML.parse("a: !!python/object x") }

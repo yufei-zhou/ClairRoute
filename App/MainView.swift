@@ -73,7 +73,7 @@ private struct StatusBadge: View {
     }
 }
 
-/// Shows the latest error (until dismissed) or a short-lived success notice.
+/// Import warnings remain visible until dismissed or superseded by another operation.
 private struct MessageBar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var library: AppLibraryModel
@@ -89,18 +89,14 @@ private struct MessageBar: View {
             .font(.callout).padding(.horizontal, 20).padding(.vertical, 12)
             .background(.orange.opacity(0.1))
         } else if !model.notice.isEmpty {
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                Text(model.notice)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "info.circle.fill").foregroundStyle(.blue)
+                Text(model.notice).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 Spacer()
+                Button("关闭") { model.dismissError() }.buttonStyle(.borderless)
             }
             .font(.callout).padding(.horizontal, 20).padding(.vertical, 10)
-            .background(.green.opacity(0.08))
-            .task(id: model.notice) {
-                let shown = model.notice
-                try? await Task.sleep(for: .seconds(6))
-                if model.notice == shown { model.notice = "" }
-            }
+            .background(.blue.opacity(0.08))
         }
     }
 }

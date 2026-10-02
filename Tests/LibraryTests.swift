@@ -201,7 +201,153 @@ private func checkPrivatePermissions(_ directory: URL) throws {
     try libraryExpect(library.nodes.contains { $0.name == "Manual" && $0.sourceID == nil } && library.nodes.contains { $0.name == "Manual · Churn" && $0.sourceID == id },
                       "a subscription node that clashes with a manual node is renamed instead of failing")
     try library.setSubscriptionEnabled(id: id, enabled: false)
-    try libraryExpect(library.fallbackPolicy == "PROXY", "disabling a subscription repoints policies that referenced it")
+    try libraryExpect(library.fallbackPolicy == group && library.rules.last?.policy == group,
+                      "disabling a subscription preserves saved targets")
+    try libraryExpect(try library.runtimeProfile(mode: .rule).fallbackPolicy == "REJECT",
+                      "disabled subscription targets reject in the transient runtime profile")
+    try library.setSubscriptionEnabled(id: id, enabled: true)
+    try libraryExpect(try library.runtimeProfile(mode: .rule).fallbackPolicy == group,
+                      "reenabling restores the saved targets")
+    try vault.expectUnused()
+}
+
+/// Aliases remain bound to their source through collisions, source renames and refresh reordering.
+@MainActor private func runSubscriptionAliasTests(directory: URL) async throws {
+    let url = URL(string: "https://example.test/aliases")!
+    func payload(_ server: String, domain: String) -> Data {
+        Data("""
+        proxies:
+          - {name: Shared, type: ss, server: \(server), port: 443, cipher: aes-256-gcm, password: mock-alias}
+        rules:
+          - DOMAIN,\(domain),Shared
+        """.utf8)
+    }
+    let first = payload("one.example.test", domain: "one.test")
+    let second = payload("two.example.test", domain: "two.test")
+    let fetcher = ScriptedSubscriptionFetcher(url: url, downloads: [first, second, second, first].map {
+        SubscriptionDownload(data: $0, userInfo: nil)
+    })
+    let vault = MemorySecretVault(); vault.rejectAllAccess = true
+    let store = ProfileStore(directory: directory, vault: vault)
+    let library = AppLibraryModel(store: store, service: fetcher, automaticRefresh: false)
+    let manual = ProxyNode(name: "Shared", server: "manual.example.test", port: 443, cipher: "aes-256-gcm", password: "mock-manual")
+    try library.saveNode(manual)
+    try library.addSubscription(name: "Same source", url: url.absoluteString, interval: 300)
+    try library.addSubscription(name: "Same source", url: url.absoluteString, interval: 300)
+    let a = library.subscriptions[0].id, b = library.subscriptions[1].id
+    try await library.refreshSubscription(id: a)
+    try await library.refreshSubscription(id: b)
+    let savedA = library.nodes.first { $0.sourceID == a }!
+    let savedB = library.nodes.first { $0.sourceID == b }!
+    try libraryExpect(savedA.name == "Shared · Same source" && savedB.name == "Shared · Same source 2",
+                      "colliding source names receive unique aliases")
+    try libraryExpect(library.subscriptionRules.first { $0.sourceID == a }?.policy == savedA.name &&
+                      library.subscriptionRules.first { $0.sourceID == b }?.policy == savedB.name,
+                      "each provider rule is remapped to its own aliased node")
+    try library.persistRules([RoutingRule(kind: .domain, value: "chosen.test", policy: savedA.name)])
+    try library.setFallbackPolicy(savedB.name)
+    try library.selectNode(savedA.name)
+    try library.removeNode(id: manual.id)
+    try library.updateSubscription(id: a, name: "Renamed source", interval: 300)
+    try await library.refreshSubscription(id: b)
+    try await library.refreshSubscription(id: a)
+    let refreshedA = library.nodes.first { $0.sourceID == a }!
+    let refreshedB = library.nodes.first { $0.sourceID == b }!
+    try libraryExpect(refreshedA.name == savedA.name && refreshedA.id == savedA.id &&
+                      refreshedB.name == savedB.name && refreshedB.id == savedB.id,
+                      "aliases and identities survive source rename, disappearing collisions and refresh order changes")
+    try libraryExpect(library.rules[0].policy == savedA.name && library.fallbackPolicy == savedB.name && library.selectedNode == savedA.name,
+                      "refresh preserves user rules, fallback and selected node")
+    try libraryExpect(library.subscriptionRules.first { $0.sourceID == a }?.policy == savedA.name &&
+                      library.subscriptionRules.first { $0.sourceID == b }?.policy == savedB.name,
+                      "refreshed provider rules retain their source-specific aliases")
+    try vault.expectUnused()
+}
+
+@MainActor private func runSubscriptionDisableTests(directory: URL) async throws {
+    let url = URL(string: "https://example.test/disable")!
+    let data = Data("""
+    proxies:
+      - {name: Disabled SS, type: ss, server: example.test, port: 443, cipher: aes-256-gcm, password: mock-disable}
+    rules:
+      - DOMAIN,provider.test,Disabled SS
+    """.utf8)
+    let fetcher = ScriptedSubscriptionFetcher(url: url, downloads: [SubscriptionDownload(data: data, userInfo: nil)])
+    let vault = MemorySecretVault(); vault.rejectAllAccess = true
+    let store = ProfileStore(directory: directory, vault: vault)
+    let library = AppLibraryModel(store: store, service: fetcher, automaticRefresh: false)
+    let manual = ProxyNode(name: "Available SS", server: "manual.example.test", port: 443, cipher: "aes-256-gcm", password: "mock-available")
+    try library.saveNode(manual)
+    try library.addSubscription(name: "Toggle source", url: url.absoluteString, interval: 300)
+    let id = library.subscriptions[0].id, group = ConfigurationBuilder.sourcePolicy(id)
+    try await library.refreshSubscription(id: id)
+    let nodeName = library.nodes.first { $0.sourceID == id }!.name
+    let rules = [RoutingRule(kind: .domain, value: "node.test", policy: nodeName),
+                 RoutingRule(kind: .domain, value: "group.test", policy: group)]
+    try library.persistRules(rules)
+    try library.setFallbackPolicy(group)
+    try library.selectNode(nodeName)
+    try library.setSubscriptionEnabled(id: id, enabled: false)
+    let disk = try diskSnapshot(directory)
+    try libraryExpect(disk.rules == rules && disk.fallbackPolicy == group && disk.selectedNode == nodeName,
+                      "disabling retains rules, fallback and selection in the committed file")
+    try libraryRejects("applying an unavailable selection must require a deliberate replacement") {
+        _ = try library.runtimeProfile(mode: .global)
+    }
+    let reloaded = AppLibraryModel(store: ProfileStore(directory: directory, vault: vault), service: NoNetworkSubscriptionFetcher(), automaticRefresh: false)
+    try libraryExpect(reloaded.error == nil && reloaded.rules == rules && reloaded.selectedNode == nodeName,
+                      "disabled references survive restarting the library")
+    try reloaded.setSubscriptionEnabled(id: id, enabled: true)
+    let restored = try reloaded.runtimeProfile(mode: .rule)
+    try libraryExpect(restored.selectedNode == nodeName && restored.fallbackPolicy == group && Array(restored.rules.prefix(rules.count)) == rules,
+                      "reenabling restores exact selection, rule targets and fallback")
+    try reloaded.setSubscriptionEnabled(id: id, enabled: false)
+    try reloaded.selectNode(manual.name)
+    let disabled = try reloaded.runtimeProfile(mode: .rule)
+    try libraryExpect(disabled.nodes.map(\.name) == [manual.name] && disabled.rules.map(\.policy) == ["REJECT", "REJECT"] && disabled.fallbackPolicy == "REJECT",
+                      "unavailable rule and fallback targets reject instead of switching to another node")
+    try libraryExpect(reloaded.rules == rules && reloaded.fallbackPolicy == group,
+                      "runtime projection does not mutate saved preferences")
+    try vault.expectUnused()
+}
+
+@MainActor private func runDisabledLibraryValidationTests(directory: URL) async throws {
+    let url = URL(string: "https://example.test/disabled-validation")!
+    let data = Data("""
+    proxies:
+      - {name: Node, type: ss, server: example.test, port: 443, cipher: aes-256-gcm, password: mock-disabled}
+    rules:
+      - DOMAIN,provider.test,Node
+    """.utf8)
+    let fetcher = ScriptedSubscriptionFetcher(url: url, downloads: [SubscriptionDownload(data: data, userInfo: nil)])
+    let vault = MemorySecretVault(); vault.rejectAllAccess = true
+    let store = ProfileStore(directory: directory, vault: vault)
+    let library = AppLibraryModel(store: store, service: fetcher, automaticRefresh: false)
+    try library.addSubscription(name: "Disabled validation", url: url.absoluteString, interval: 300)
+    let id = library.subscriptions[0].id
+    try await library.refreshSubscription(id: id)
+    try library.selectNode("Node")
+    try library.setSubscriptionEnabled(id: id, enabled: false)
+    let original = try Data(contentsOf: profileFile(directory))
+    try libraryRejects("manual node case-folding collision with a disabled subscription node") {
+        try library.saveNode(ProxyNode(name: "node", server: "manual.example.test", port: 443, cipher: "aes-256-gcm", password: "mock-manual"))
+    }
+    try libraryExpect(try Data(contentsOf: profileFile(directory)) == original,
+                      "invalid edits preserve the committed disabled profile")
+    let valid = try diskSnapshot(directory)
+    func rejectsFixture(_ name: String, _ mutate: (inout LibrarySnapshot) -> Void) throws {
+        var fixture = valid; mutate(&fixture)
+        let target = directory.appendingPathComponent(name)
+        try writeFixture(fixture, directory: target)
+        let reloaded = ProfileStore(directory: target, vault: vault)
+        try libraryRejects(name) { try reloaded.load() }
+        try libraryExpect(!reloaded.loaded, "invalid saved entries are rejected even while disabled")
+    }
+    try rejectsFixture("dangling-disabled-rule") { $0.subscriptionRules[0].policy = "Missing node" }
+    try rejectsFixture("invalid-disabled-rule") { $0.subscriptionRules[0].value = "" }
+    try rejectsFixture("unknown-rule-source") { $0.subscriptionRules[0].sourceID = UUID() }
+    try rejectsFixture("dangling-selection") { $0.selectedNode = "Missing node" }
+    try rejectsFixture("dangling-fallback") { $0.fallbackPolicy = "Missing node" }
     try vault.expectUnused()
 }
 
@@ -399,6 +545,9 @@ private func runInvalidPlaintextTests(directory: URL) throws {
     try runPlaintextPersistenceTests(directory: directory.appendingPathComponent("plaintext"))
     try await runSubscriptionPersistenceTests(directory: directory.appendingPathComponent("subscriptions"))
     try await runSubscriptionChurnTests(directory: directory.appendingPathComponent("churn"))
+    try await runSubscriptionAliasTests(directory: directory.appendingPathComponent("aliases"))
+    try await runSubscriptionDisableTests(directory: directory.appendingPathComponent("disable"))
+    try await runDisabledLibraryValidationTests(directory: directory.appendingPathComponent("disabled-validation"))
     try runAtomicFailureTests(directory: directory.appendingPathComponent("atomic"))
     try runMigrationTests(directory: directory.appendingPathComponent("migration"))
     try runMigrationCleanupFailureTests(directory: directory.appendingPathComponent("cleanup"))

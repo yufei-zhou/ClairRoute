@@ -191,18 +191,31 @@ final class CoreProcess {
     }
 
     func terminate() throws {
-        if running {
-            // A child that exits between the two checks is a zombie whose identity can no longer be read.
-            guard identity.stillMatches || !running else { throw HelperFailure.refused("Core process identity changed; refusing to signal another process.") }
-            kill(pid, SIGTERM)
+        if try signalIfRunning(SIGTERM) {
             let deadline = ProcessInfo.processInfo.systemUptime + 3
             while running, ProcessInfo.processInfo.systemUptime < deadline { Thread.sleep(forTimeInterval: 0.05) }
-            if running, identity.stillMatches { kill(pid, SIGKILL) }
+            _ = try signalIfRunning(SIGKILL)
             let forcedDeadline = ProcessInfo.processInfo.systemUptime + 2
             while running, ProcessInfo.processInfo.systemUptime < forcedDeadline { Thread.sleep(forTimeInterval: 0.05) }
             guard !running else { throw HelperFailure.refused("The core did not exit; its recovery record was retained.") }
         }
         observation?.cancel()
+    }
+
+    private func signalIfRunning(_ signal: Int32) throws -> Bool {
+        guard running else { return false }
+        guard identity.stillMatches else {
+            // Identity reads may fail for an exited child. Collect it, then return:
+            // waitpid releases its PID, which must never be signalled afterwards.
+            guard running else { return false }
+            throw HelperFailure.refused("Core process identity changed; refusing to signal another process.")
+        }
+        // No waitpid occurs between the identity check and kill. Even if the
+        // child exits here, its unreaped zombie keeps this PID from being reused.
+        guard kill(pid, signal) == 0 || errno == ESRCH else {
+            throw HelperFailure.refused("The core could not be signalled; its recovery record was retained.")
+        }
+        return true
     }
 
     private func collectExit() {

@@ -147,21 +147,38 @@ final class AppLibraryModel: ObservableObject {
             next.subscriptionRules.removeAll { $0.sourceID == id }
             var additions: [UUID: Data] = [:]
             var overrides: [UUID: ProxyNode] = [:]
+            // Payload and node order are committed together. Recover original provider names
+            // so aliases remain stable even if a collision disappears or the source is renamed.
+            let originals = Self.previousNodes(previous, payload: secret.payload, sourceID: id)
+            let preserved = Set(parsed.nodes.compactMap { originals[$0.name]?.name }.map(Self.nameKey))
+            var occupied = Set(next.nodes.map { Self.nameKey($0.name) }).union(preserved)
+            // Reserve still-referenced previous names so a new node cannot silently inherit them.
+            occupied.formUnion(previous.map { Self.nameKey($0.name) })
+            var names: [String: String] = [:]
             for var node in parsed.nodes {
-                if next.nodes.contains(where: { $0.name == node.name }) {
-                    // Another subscription or a manual node already uses this name; disambiguate.
-                    let suffix = Self.truncated(" · " + metadata.name.replacingOccurrences(of: ",", with: " "), bytes: 48)
-                    let renamed = (Self.truncated(node.name, bytes: 128 - suffix.utf8.count) + suffix).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !next.nodes.contains(where: { $0.name == renamed }) else { throw StoreError.duplicateName }
-                    node.name = renamed
+                let originalName = node.name
+                if let existing = originals[originalName] {
+                    guard !next.nodes.contains(where: { Self.nameKey($0.name) == Self.nameKey(existing.name) }) else { throw StoreError.duplicateName }
+                    node.name = existing.name; node.id = existing.id
+                } else {
+                    node.name = Self.availableName(originalName, sourceName: next.subscriptions[currentIndex].name,
+                                                   occupied: occupied)
                 }
+                occupied.insert(Self.nameKey(node.name))
+                names[originalName] = node.name
                 node.sourceID = id
-                if let existing = previous.first(where: { $0.name == node.name }) { node.id = existing.id }
                 let reference = UUID()
                 next.nodes.append(NodeMetadata(node: node, secretID: reference))
                 additions[reference] = try JSONEncoder().encode(node); overrides[reference] = node
             }
-            next.subscriptionRules.append(contentsOf: parsed.rules.map { var rule = $0; rule.sourceID = id; return rule })
+            next.subscriptionRules.append(contentsOf: parsed.rules.map {
+                var rule = $0
+                rule.sourceID = id
+                // A provider rule belongs to this provider's node, never an unrelated
+                // manual node or subscription that happened to use its original name.
+                rule.policy = names[rule.policy] ?? rule.policy
+                return rule
+            })
             let subscriptionReference = UUID()
             next.subscriptions[currentIndex].secretID = subscriptionReference
             next.subscriptions[currentIndex].lastUpdated = Date()
@@ -197,10 +214,8 @@ final class AppLibraryModel: ObservableObject {
         var next = store.snapshot
         guard let index = next.subscriptions.firstIndex(where: { $0.id == id }) else { throw StoreError.missingNode }
         next.subscriptions[index].enabled = enabled
-        if !enabled, let selected = next.selectedNode, next.nodes.contains(where: { $0.sourceID == id && $0.name == selected }) { next.selectedNode = nil }
-        if !enabled {
-            Self.repoint(&next, from: Set(next.nodes.filter { $0.sourceID == id }.map(\.name) + [ConfigurationBuilder.sourcePolicy(id)]), to: "PROXY")
-        }
+        // Disabling is reversible: retain rules, fallback and selection on disk.
+        // Runtime generation rejects unavailable rule targets without rewriting preferences.
         try validate(next)
         try commit(next)
     }
@@ -237,6 +252,9 @@ final class AppLibraryModel: ObservableObject {
     }
     func runtimeProfile(mode: OutboundMode) throws -> RuntimeProfile {
         guard store.loaded else { throw StoreError.notLoaded }
+        if store.snapshot.hasDisabledSelection {
+            throw ConfigurationError.invalid("所选节点的订阅已停用，请启用该订阅或选择其他节点。")
+        }
         let profile = try runtime(store.snapshot, mode: mode)
         try ConfigurationBuilder.validate(profile)
         return profile
@@ -273,10 +291,40 @@ final class AppLibraryModel: ObservableObject {
         }
         return result
     }
-    /// Points user rules and the fallback at `replacement` when they name a policy that is going away.
+    private static func nameKey(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+    }
+    private static func previousNodes(_ nodes: [NodeMetadata], payload: Data?, sourceID: UUID) -> [String: NodeMetadata] {
+        guard let payload, let parsed = try? SubscriptionParser.parse(payload, sourceID: sourceID),
+              parsed.nodes.count == nodes.count else {
+            return Dictionary(uniqueKeysWithValues: nodes.map { ($0.name, $0) })
+        }
+        var result: [String: NodeMetadata] = [:]
+        for (original, saved) in zip(parsed.nodes, nodes) {
+            // Older/imported profiles without matching payload metadata use exact-name matching.
+            guard original.server == saved.server, original.port == saved.port, original.type == saved.type else {
+                return Dictionary(uniqueKeysWithValues: nodes.map { ($0.name, $0) })
+            }
+            result[original.name] = saved
+        }
+        return result
+    }
+    private static func availableName(_ name: String, sourceName: String, occupied: Set<String>) -> String {
+        if !occupied.contains(nameKey(name)) { return name }
+        let source = sourceName.replacingOccurrences(of: ",", with: " ")
+        var number = 1
+        while true {
+            let suffix = truncated(" · " + source, bytes: 40) + (number == 1 ? "" : " \(number)")
+            let candidate = (truncated(name, bytes: 128 - suffix.utf8.count) + suffix).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !occupied.contains(nameKey(candidate)) { return candidate }
+            number += 1
+        }
+    }
+    /// Updates all persisted references when a policy is permanently removed.
     private static func repoint(_ snapshot: inout LibrarySnapshot, from removed: Set<String>, to replacement: String) {
         guard !removed.isEmpty else { return }
         for index in snapshot.rules.indices where removed.contains(snapshot.rules[index].policy) { snapshot.rules[index].policy = replacement }
+        for index in snapshot.subscriptionRules.indices where removed.contains(snapshot.subscriptionRules[index].policy) { snapshot.subscriptionRules[index].policy = replacement }
         if removed.contains(snapshot.fallbackPolicy) { snapshot.fallbackPolicy = replacement }
     }
     private func checkInterval(_ interval: TimeInterval) throws {
@@ -297,17 +345,16 @@ final class AppLibraryModel: ObservableObject {
     }
     private func runtime(_ snapshot: LibrarySnapshot, mode: OutboundMode = .rule,
                          overrides: [UUID: ProxyNode] = [:]) throws -> RuntimeProfile {
-        let enabled = Set(snapshot.subscriptions.filter(\.enabled).map(\.id))
-        let nodes = try snapshot.nodes.filter { $0.sourceID == nil || enabled.contains($0.sourceID!) }.map {
+        snapshot.runtimeProfile(nodes: try readNodes(snapshot, overrides: overrides), mode: mode)
+    }
+    private func readNodes(_ snapshot: LibrarySnapshot, overrides: [UUID: ProxyNode]) throws -> [ProxyNode] {
+        try snapshot.nodes.map {
             if let node = overrides[$0.secretID] { return node }
             return try store.readNode($0)
         }
-        let subscriptionRules = snapshot.subscriptionRules.filter { $0.sourceID.map(enabled.contains) ?? false }
-        return RuntimeProfile(nodes: nodes, mode: mode, rules: snapshot.rules + subscriptionRules,
-                              fallbackPolicy: snapshot.fallbackPolicy, selectedNode: snapshot.selectedNode, advanced: snapshot.advanced)
     }
     private func validate(_ snapshot: LibrarySnapshot, overrides: [UUID: ProxyNode] = [:]) throws {
-        try ConfigurationBuilder.validate(runtime(snapshot, overrides: overrides))
+        try snapshot.validate(nodes: readNodes(snapshot, overrides: overrides))
     }
     private func commit(_ next: LibrarySnapshot, additions: [UUID: Data] = [:], removing: Set<UUID> = []) throws {
         defer { publish() }

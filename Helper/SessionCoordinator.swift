@@ -39,6 +39,11 @@ final class SessionCoordinator: @unchecked Sendable {
     private var reconciliationPending = false
     private var reconciliationAttempts = 0
     private var selectedNode: String?
+    private var recoveryBootstrapPending = true
+    private var restorationRetry: DispatchWorkItem?
+    private var restorationRetryID: UUID?
+    private var restorationAttempts = 0
+    private var shuttingDown = false
 
     init(clientRequirement: String) throws {
         self.clientRequirement = clientRequirement
@@ -51,34 +56,16 @@ final class SessionCoordinator: @unchecked Sendable {
 
     func activate() {
         worker.async { [self] in
-            let transaction: SafetyLockToken
-            do { transaction = try safety.lock() }
-            catch {
-                status = ServiceStatus(phase: .needsAttention, message: safeMessage(error), recoveryPending: true)
-                return
-            }
-            defer { transaction.release() }
-            var failures: [String] = []
-            // Restore owned DNS/proxy first, while a surviving core can still serve them.
-            do { try network.recoverIfNeeded() }
-            catch { failures.append("The previous DNS or system proxy settings could not be restored.") }
-            do { try core.recoverPreviousProcess() }
-            catch { failures.append("The previous core process could not be safely recovered.") }
-            if if_nametoindex(AppConstants.tunInterfaceName) != 0 {
-                unresolvedPreviousInterface = true
-                failures.append("The reserved TUN interface is already present. Its ownership cannot be established after restart; stop the previous session before continuing.")
-            }
-            if !failures.isEmpty {
-                status = ServiceStatus(phase: .needsAttention,
-                    message: failures.joined(separator: " "),
-                    recoveryPending: true)
-            }
+            // Startup uses the same retryable recovery path as a disconnected
+            // GUI. A transient lock/DNS failure must not disable its watchdog.
             network.startObserving { [weak self] in self?.networkDidChange() }
             power = PowerEvents { [weak self] event in self?.powerChanged(event) }
             powerReady = power?.start() == true
+            _ = restore(reason: "Previous owned network settings were restored.")
             if !powerReady || !network.observationAvailable {
                 status.phase = .needsAttention
-                status.message = "Network or sleep/wake monitoring could not be registered. Proxying is disabled until both monitors are available."
+                let message = "Network or sleep/wake monitoring could not be registered. Proxying is disabled until both monitors are available."
+                status.message = status.recoveryPending ? status.message + " " + message : message
             }
             let timer = DispatchSource.makeTimerSource(queue: worker)
             timer.schedule(deadline: .now() + 5, repeating: 5)
@@ -96,6 +83,7 @@ final class SessionCoordinator: @unchecked Sendable {
         let delivery = ReplyDelivery(reply)
         worker.async { [self] in
             do {
+                guard !shuttingDown else { throw HelperFailure.refused("The Helper is shutting down.") }
                 try client.requireConsoleOwner()
                 try requireOwner(client)
                 let transaction = try safety.lock()
@@ -288,6 +276,9 @@ final class SessionCoordinator: @unchecked Sendable {
 
     func shutdown() {
         worker.async { [self] in
+            shuttingDown = true
+            cancelRestorationRetry()
+            leaseTimer?.cancel()
             try? SafetyFile.helperReadiness.remove()
             _ = restore(reason: "The Helper is shutting down.")
             network.stopObserving()
@@ -323,31 +314,47 @@ final class SessionCoordinator: @unchecked Sendable {
     }
 
     private func restore(reason: String) -> String? {
-        let previousDesired = desired
+        // Restoration has its own lifetime. Detach the GUI and cancel active
+        // reconciliation even if the safety lock cannot currently be acquired.
+        // Neither a late heartbeat nor a wake event may re-enable this session.
+        desired = nil
+        selectedNode = nil
+        owner = nil
+        ownerExit?.cancel()
+        ownerExit = nil
+        networkWork?.cancel()
+        networkWork = nil
+        reconciliationPending = false
+        cancelRestorationRetry()
         let transaction: SafetyLockToken
         do { transaction = try safety.lock() }
         catch {
-            status.phase = .needsAttention
-            status.recoveryPending = true
-            status.message = safeMessage(error)
+            finishRestorationAttempt(failures: [safeMessage(error)], reason: reason)
             return status.message
         }
         defer { transaction.release() }
         status.phase = .restoring
-        networkWork?.cancel()
-        reconciliationPending = false
         var failures: [String] = []
+        if recoveryBootstrapPending {
+            do {
+                // Reading the journal first exposes a surviving core to status
+                // and keeps it serving DNS when restoration must be retried.
+                try core.adoptPreviousProcess()
+                unresolvedPreviousInterface = if_nametoindex(AppConstants.tunInterfaceName) != 0 && !core.ownsTUNInterface
+                recoveryBootstrapPending = false
+            } catch { failures.append("The previous core recovery record could not be safely loaded.") }
+        }
         var restored = false
         for attempt in 0..<3 where !restored {
-            do { try network.restoreAll(); restored = true }
+            do { try network.recoverIfNeeded(); restored = true }
             catch { if attempt < 2 { Thread.sleep(forTimeInterval: 0.5) } }
         }
         if !restored { failures.append("DNS or system proxy restoration is incomplete.") }
-        // Keep the core serving loopback DNS while system DNS still points at it;
-        // stopping it now would leave the Mac without name resolution.
-        if network.ownsDNS && core.running {
-            failures.append("System DNS still points at ClairRoute, so the core was kept running. Retry restoration.")
-        } else {
+        // Keep both DNS and proxy listeners available while any owned consumers
+        // still depend on them. The independent retry no longer needs a GUI.
+        if network.recoveryPending && core.running {
+            failures.append("Owned DNS or system proxy settings still depend on ClairRoute, so the core was kept running.")
+        } else if !recoveryBootstrapPending {
             do { try core.stop() }
             catch { failures.append(safeMessage(error)) }
         }
@@ -359,20 +366,55 @@ final class SessionCoordinator: @unchecked Sendable {
             do { try safety.finishOwnedTrial() }
             catch { failures.append(safeMessage(error)) }
         }
-        desired = nil
-        selectedNode = nil
-        owner = nil
-        ownerExit?.cancel()
-        ownerExit = nil
-        let pending = network.recoveryPending || core.recoveryPending || !failures.isEmpty
+        finishRestorationAttempt(failures: failures, reason: reason)
+        return status.recoveryPending ? status.message : nil
+    }
+
+    private func finishRestorationAttempt(failures: [String], reason: String) {
+        let pending = recoveryBootstrapPending || network.recoveryPending || core.recoveryPending || !failures.isEmpty
         let completedMessage = network.lastRestorationNotice.map { reason + " " + $0 } ?? reason
+        let pendingMessage = failures.isEmpty ? "Restoration is still pending." : failures.joined(separator: " ")
         status = ServiceStatus(phase: pending ? .needsAttention : .idle,
-            tunEnabled: core.running && previousDesired?.tunEnabled == true,
-            systemProxyEnabled: network.ownsSystemProxy && previousDesired?.systemProxyEnabled == true,
+            tunEnabled: core.running && core.ownsTUNInterface,
+            systemProxyEnabled: network.ownsSystemProxy,
             coreRunning: core.running, corePID: core.pid,
-            message: pending ? failures.joined(separator: " ") : completedMessage,
+            message: pending ? pendingMessage + (shuttingDown ? " Recovery records were retained." : " Restoration will retry automatically.") : completedMessage,
             recoveryPending: pending)
-        return pending ? (failures.isEmpty ? "Restoration is still pending." : failures.joined(separator: " ")) : nil
+        if pending { scheduleRestorationRetry() }
+        else {
+            restorationAttempts = 0
+            if !powerReady || !network.observationAvailable {
+                status.phase = .needsAttention
+                status.message = completedMessage + " Proxying remains disabled until network and sleep/wake monitoring are available."
+            }
+        }
+    }
+
+    private func cancelRestorationRetry() {
+        restorationRetry?.cancel()
+        restorationRetry = nil
+        restorationRetryID = nil
+    }
+
+    private func scheduleRestorationRetry(immediate: Bool = false) {
+        guard status.recoveryPending, !sleeping, !shuttingDown else { return }
+        if restorationRetry != nil && !immediate { return }
+        cancelRestorationRetry()
+        let delays: [TimeInterval] = [2, 5, 10, 20, 30]
+        let delay = immediate ? 0 : delays[min(restorationAttempts, delays.count - 1)]
+        restorationAttempts = min(restorationAttempts + 1, delays.count - 1)
+        let id = UUID()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.restorationRetryID == id else { return }
+            self.restorationRetry = nil
+            self.restorationRetryID = nil
+            guard self.status.recoveryPending, !self.sleeping, !self.shuttingDown else { return }
+            _ = self.restore(reason: "Pending network restoration completed.")
+            self.publishInstallationReadiness()
+        }
+        restorationRetryID = id
+        restorationRetry = item
+        worker.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     private func setActive(_ request: ApplyRequest, message: String) {
@@ -414,6 +456,10 @@ final class SessionCoordinator: @unchecked Sendable {
 
     private func enqueueCoreExit() {
         worker.async { [self] in
+            if status.recoveryPending {
+                scheduleRestorationRetry(immediate: true)
+                return
+            }
             guard desired != nil, !core.running else { return }
             _ = restore(reason: "The core exited unexpectedly; network settings were restored.")
         }
@@ -424,6 +470,10 @@ final class SessionCoordinator: @unchecked Sendable {
     }
 
     private func scheduleReconciliation() {
+        if status.recoveryPending {
+            scheduleRestorationRetry()
+            return
+        }
         guard desired != nil else { return }
         reconciliationPending = true
         guard !sleeping else { return }
@@ -434,7 +484,8 @@ final class SessionCoordinator: @unchecked Sendable {
     }
 
     private func reconcile() {
-        guard let request = desired, let configuration = core.lastConfiguration, !sleeping else { return }
+        guard !status.recoveryPending, !shuttingDown,
+              let request = desired, let configuration = core.lastConfiguration, !sleeping else { return }
         reconciliationPending = false
         do {
             let transaction = try safety.lock()
@@ -468,11 +519,13 @@ final class SessionCoordinator: @unchecked Sendable {
             case .willSleep:
                 sleeping = true
                 networkWork?.cancel()
+                cancelRestorationRetry()
             case .didWake:
                 sleeping = false
                 wakeGraceUntil = ProcessInfo.processInfo.systemUptime + 30
                 lastHeartbeat = ProcessInfo.processInfo.systemUptime
-                scheduleReconciliation()
+                if status.recoveryPending { scheduleRestorationRetry(immediate: true) }
+                else { scheduleReconciliation() }
             }
         }
     }

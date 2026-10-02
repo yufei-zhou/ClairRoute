@@ -86,6 +86,38 @@ struct LibrarySnapshot: Codable, Sendable {
 }
 
 extension LibrarySnapshot {
+    var hasDisabledSelection: Bool {
+        guard let selectedNode, let sourceID = nodes.first(where: { $0.name == selectedNode })?.sourceID else { return false }
+        return subscriptions.contains { $0.id == sourceID && !$0.enabled }
+    }
+
+    /// Disabled entries are still durable configuration and must remain valid when reenabled.
+    func validate(nodes allNodes: [ProxyNode]) throws {
+        let sourceIDs = Set(subscriptions.map(\.id))
+        guard rules.allSatisfy({ $0.sourceID == nil }),
+              subscriptionRules.allSatisfy({ $0.sourceID.map(sourceIDs.contains) ?? false }) else { throw StoreError.invalidRules }
+        try ConfigurationBuilder.validate(RuntimeProfile(nodes: allNodes, rules: rules + subscriptionRules,
+            fallbackPolicy: fallbackPolicy, selectedNode: selectedNode, advanced: advanced))
+        try ConfigurationBuilder.validate(runtimeProfile(nodes: allNodes))
+    }
+
+    /// Build a transient configuration; never replace saved targets just because a source is disabled.
+    func runtimeProfile(nodes allNodes: [ProxyNode], mode: OutboundMode = .rule) -> RuntimeProfile {
+        let enabled = Set(subscriptions.filter(\.enabled).map(\.id))
+        let disabled = Set(subscriptions.filter { !$0.enabled }.map(\.id))
+        let unavailable = Set(allNodes.filter { $0.sourceID.map(disabled.contains) ?? false }.map(\.name))
+            .union(disabled.map(ConfigurationBuilder.sourcePolicy))
+        let activeNodes = allNodes.filter { $0.sourceID.map(enabled.contains) ?? true }
+        let activeRules = (rules + subscriptionRules.filter { $0.sourceID.map(enabled.contains) ?? false }).map {
+            var rule = $0
+            if unavailable.contains(rule.policy) { rule.policy = "REJECT" }
+            return rule
+        }
+        return RuntimeProfile(nodes: activeNodes, mode: mode, rules: activeRules,
+                              fallbackPolicy: unavailable.contains(fallbackPolicy) ? "REJECT" : fallbackPolicy,
+                              selectedNode: hasDisabledSelection ? nil : selectedNode, advanced: advanced)
+    }
+
     /// Missing keys fall back to defaults so that adding a field never makes an existing profile unreadable.
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -335,11 +367,7 @@ final class ProfileStore {
                   record.payload.map({ $0.count <= SubscriptionService.maximumBytes }) ?? true else { throw StoreError.invalidData }
             _ = try SubscriptionService.validatedURL(record.url)
         }
-        let enabled = Set(value.subscriptions.filter(\.enabled).map(\.id))
-        let activeNodes = value.nodes.filter { $0.sourceID.map(enabled.contains) ?? true }.compactMap { nodes[$0.secretID.uuidString] }
-        let activeRules = value.subscriptionRules.filter { $0.sourceID.map(enabled.contains) ?? false }
-        try ConfigurationBuilder.validate(RuntimeProfile(nodes: activeNodes, rules: value.rules + activeRules,
-            fallbackPolicy: value.fallbackPolicy, selectedNode: value.selectedNode, advanced: value.advanced))
+        try value.validate(nodes: value.nodes.compactMap { nodes[$0.secretID.uuidString] })
     }
 
     @discardableResult private func save(_ value: LibrarySnapshot) throws -> Bool {
