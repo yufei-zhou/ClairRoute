@@ -46,6 +46,8 @@ Downloads use ephemeral URLSession without disk cache, cookies or credential sto
 
 Disabling a subscription preserves saved user policies, fallback and selected node. Runtime projection maps disabled policy targets to DIRECT; applying with a disabled selected node is rejected until the user selects an available node or re-enables its subscription. Re-enabling restores the saved policies. Collision aliases and subscription-rule targets are updated together.
 
+Success notices expire after eight seconds; each occurrence has a new identity, and cancelled timers never clear messages. Import/refresh warnings use a separate channel and remain until manually dismissed, including across later operations. Repeated pending warnings are deduplicated; the same warning can appear again after dismissal.
+
 Clash/Mihomo YAML, Base64 URI lists and ss/vmess/vless URIs are parsed locally without online converters. Typed nodes generate **inline proxy-providers**, so secret subscription URLs never reach root files. Provider/group names are generated locally, with stable internal node IDs separate from display names. Safe full-template fields may be ignored; executable providers, foreign paths, unsafe directives, YAML tags/aliases and unsupported transports are rejected instead of copied. Remote rule-provider fetching is unsupported; GEOSITE uses the bundled hash-checked asset.
 
 The connection panel shows process/path, destination, matching rule and outbound chains, and drafts rules from rows. Polling uses bounded snapshots. Delay tests and actual connection observations are live network operations requiring an authenticated active session.

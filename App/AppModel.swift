@@ -10,6 +10,7 @@ import Combine
     private var polling: Task<Void, Never>?
     private var libraryObservation: AnyCancellable?
     private var libraryNoticeObservation: AnyCancellable?
+    private var libraryWarningsObservation: AnyCancellable?
     private var attemptedMutation = false
     private var unconfirmed = false
     private var activeTrialMode = false
@@ -18,7 +19,11 @@ import Combine
     @Published var busy = false
     @Published var helperConnected = false
     @Published var error: String?
-    @Published var notice = ""
+    @Published var notice = "" {
+        didSet { noticeID = UUID() }
+    }
+    @Published private(set) var noticeID = UUID()
+    @Published private(set) var pendingWarnings: [String] = []
     @Published var connections: [ConnectionSnapshot] = []
     @Published var connectionPanelVisible = false
     @Published var delays: [String: String] = [:]
@@ -81,10 +86,18 @@ import Combine
 
     init() {
         libraryObservation = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
-        // Import, editor and automatic-refresh results all use the same visible channel.
+        // Successful import, editor and refresh results share the transient channel.
         libraryNoticeObservation = library.$notice.sink { [weak self] message in
             guard let self, let message, !message.isEmpty else { return }
             self.notice = message
+        }
+        libraryWarningsObservation = library.$warnings.sink { [weak self] warnings in
+            guard let self else { return }
+            // Keep warnings until explicit dismissal, including across refreshes
+            // and later successes. A new occurrence after dismissal is shown again.
+            for warning in warnings where !self.pendingWarnings.contains(warning) {
+                self.pendingWarnings.append(warning)
+            }
         }
         client.onDisconnect = { [weak self] in
             guard let self else { return }
@@ -249,9 +262,12 @@ import Combine
     /// Runs a library edit and reports the outcome in the message bar.
     func perform(_ action: () throws -> Void) {
         library.clearMessages()
+        let previousNoticeID = noticeID
         do {
             try action(); error = nil
-            notice = library.notice ?? (status.coreRunning ? "已保存；点击「应用配置」让运行中的会话生效。" : "已保存。")
+            if noticeID == previousNoticeID {
+                notice = status.coreRunning ? "已保存；点击「应用配置」让运行中的会话生效。" : "已保存。"
+            }
         } catch { self.error = error.localizedDescription }
     }
     func refreshSubscription(_ id: UUID) async {
@@ -260,6 +276,12 @@ import Combine
         catch { self.error = error.localizedDescription }
     }
     func dismissError() { error = nil; notice = ""; library.clearMessages() }
+    func dismissNotice() { notice = "" }
+    func dismissWarnings() { pendingWarnings = [] }
+    func expireNotice(id: UUID) {
+        guard noticeID == id else { return }
+        notice = ""
+    }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {

@@ -73,34 +73,54 @@ private struct StatusBadge: View {
     }
 }
 
-/// Shows the latest error (until dismissed) or a short-lived notice.
+/// Errors and warnings need dismissal; success notices expire independently.
 private struct MessageBar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var library: AppLibraryModel
 
     var body: some View {
-        if let error = model.error ?? library.error {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text(error).textSelection(.enabled).lineLimit(4)
-                Spacer()
-                Button("关闭") { model.dismissError() }.buttonStyle(.borderless)
+        VStack(spacing: 0) {
+            if let error = model.error ?? library.error {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(error).textSelection(.enabled).lineLimit(4)
+                    Spacer()
+                    Button("关闭") { model.dismissError() }.buttonStyle(.borderless)
+                }
+                .font(.callout).padding(.horizontal, 20).padding(.vertical, 12)
+                .background(.orange.opacity(0.1))
             }
-            .font(.callout).padding(.horizontal, 20).padding(.vertical, 12)
-            .background(.orange.opacity(0.1))
-        } else if !model.notice.isEmpty {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "info.circle.fill").foregroundStyle(.blue)
-                Text(model.notice).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                Button("关闭") { model.dismissError() }.buttonStyle(.borderless)
+            if !model.pendingWarnings.isEmpty {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    ScrollView {
+                        Text(model.pendingWarnings.joined(separator: "\n"))
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: min(CGFloat(model.pendingWarnings.count) * 48, 160))
+                    Spacer()
+                    Button("关闭警告") { model.dismissWarnings() }.buttonStyle(.borderless)
+                }
+                .font(.callout).padding(.horizontal, 20).padding(.vertical, 12)
+                .background(.orange.opacity(0.1))
             }
-            .font(.callout).padding(.horizontal, 20).padding(.vertical, 10)
-            .background(.blue.opacity(0.08))
-            .task(id: model.notice) {
-                let shown = model.notice
-                try? await Task.sleep(for: .seconds(8))
-                if model.notice == shown { model.notice = "" }
+            if model.error == nil, library.error == nil, !model.notice.isEmpty {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "info.circle.fill").foregroundStyle(.blue)
+                    Text(model.notice).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("关闭") { model.dismissNotice() }.buttonStyle(.borderless)
+                }
+                .font(.callout).padding(.horizontal, 20).padding(.vertical, 10)
+                .background(.blue.opacity(0.08))
+                .task(id: model.noticeID) {
+                    let shown = model.noticeID
+                    do { try await Task.sleep(for: .seconds(8)) }
+                    catch { return }
+                    guard !Task.isCancelled else { return }
+                    model.expireNotice(id: shown)
+                }
             }
         }
     }

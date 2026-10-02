@@ -11,6 +11,7 @@ final class AppLibraryModel: ObservableObject {
     @Published private(set) var selectedNode: String?
     @Published private(set) var advancedYAML = ""
     @Published private(set) var notice: String?
+    @Published private(set) var warnings: [String] = []
     @Published private(set) var error: String?
     @Published private(set) var refreshing: Set<UUID> = []
     @Published private(set) var pendingSecretCleanup = 0
@@ -39,7 +40,7 @@ final class AppLibraryModel: ObservableObject {
     }
     deinit { timer?.cancel() }
 
-    func clearMessages() { error = nil; notice = nil }
+    func clearMessages() { error = nil; notice = nil; warnings = [] }
 
     func readNode(id: UUID) throws -> ProxyNode {
         guard let metadata = store.snapshot.nodes.first(where: { $0.id == id }) else { throw StoreError.missingNode }
@@ -101,7 +102,8 @@ final class AppLibraryModel: ObservableObject {
         next.rules.append(contentsOf: parsed.rules.map { var rule = $0; rule.sourceID = nil; return rule })
         try validate(next, overrides: overrides)
         try commit(next, additions: additions, removing: removed)
-        notice = "已在本机导入 \(parsed.nodes.count) 个节点。" + (parsed.warnings.isEmpty ? "" : " " + parsed.warnings.joined(separator: " "))
+        notice = "已在本机导入 \(parsed.nodes.count) 个节点。"
+        warnings = parsed.warnings
     }
 
     func addSubscription(name: String, url: String, interval: TimeInterval) throws {
@@ -190,7 +192,8 @@ final class AppLibraryModel: ObservableObject {
             Self.repoint(&next, from: Set(previous.map(\.name)).subtracting(next.nodes.map(\.name)), to: ConfigurationBuilder.sourcePolicy(id))
             try validate(next, overrides: overrides)
             try commit(next, additions: additions, removing: removed)
-            notice = "订阅已更新：\(parsed.nodes.count) 个节点。点击「应用配置」后用于当前会话。" + (parsed.warnings.isEmpty ? "" : " " + parsed.warnings.joined(separator: " "))
+            notice = "订阅已更新：\(parsed.nodes.count) 个节点。点击「应用配置」后用于当前会话。"
+            warnings = parsed.warnings.map { next.subscriptions[currentIndex].name + "：" + $0 }
         } catch {
             self.error = safeError(error)
             throw error
@@ -369,7 +372,7 @@ final class AppLibraryModel: ObservableObject {
         pendingSecretCleanup = snapshot.pendingSecretIDs.count
         migrationRequired = store.migrationRequired
         advancedYAML = canonicalAdvanced(snapshot.advanced)
-        if let warning = store.warning { notice = warning }
+        if let warning = store.warning { warnings = [warning] }
     }
     private func canonicalAdvanced(_ value: AdvancedOptions) -> String { value.yamlString }
     private func safeError(_ error: any Error) -> String {
