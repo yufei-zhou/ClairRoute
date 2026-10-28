@@ -277,11 +277,46 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
         try rejects("external plugin path") { try ConfigurationBuilder.validate(invalid) }
         invalid = profile; invalid.rules[0] = RoutingRule(kind: .processPathRegex, value: "^/(a+)+$/")
         try rejects("unbounded process regex") { try ConfigurationBuilder.validate(invalid) }
+        try autoSelectTests(sourceID: sourceID)
         let defaultProfile = RuntimeProfile()
         try check(defaultProfile.rules == [.chatGPT] && defaultProfile.fallbackPolicy == "DIRECT", "fresh install defaults to ChatGPT only")
         let oldProfile = try JSONDecoder().decode(RuntimeProfile.self, from: Data(#"{"nodes":[],"mode":"rule","chatGPTOnly":true}"#.utf8))
         try check(oldProfile.rules == [.chatGPT], "M1 persisted profile backward decoding")
         print("Configuration: golden, stable priority, selection, default routing and provider isolation tests passed")
+    }
+
+    static func autoSelectTests(sourceID: UUID) throws {
+        let pool = (1...6).map { ProxyNode(name: "Auto \($0)", server: "example.test", port: 440 + $0, cipher: "aes-256-gcm", password: "test-only-password", sourceID: sourceID) }
+        let local = ProxyNode(name: "Local", server: "example.test", port: 8443, cipher: "aes-256-gcm", password: "test-only-password")
+        let firstFive = (1...5).map { "Auto \($0)" }
+        var profile = RuntimeProfile(nodes: [local] + pool, selectedNode: "Auto 3", autoSelect: AutoSelectSettings(enabled: true))
+        func groups() throws -> [String: [String: Any]] {
+            let data = try ConfigurationBuilder.makeConfiguration(profile: profile, tunEnabled: false, controllerPath: "/var/run/clairroute-test.sock")
+            let list = (try JSONSerialization.jsonObject(with: data) as! [String: Any])["proxy-groups"] as! [[String: Any]]
+            return Dictionary(uniqueKeysWithValues: list.map { ($0["name"] as! String, $0) })
+        }
+        try check(ConfigurationBuilder.autoSelectCandidates(profile) == firstFive, "automatic candidates are the first five nodes of the selected node's subscription; the sixth is excluded")
+        var output = try groups()
+        let auto = output[ConfigurationBuilder.autoPolicy]
+        try check(auto?["type"] as? String == "url-test" && auto?["proxies"] as? [String] == firstFive
+            && auto?["interval"] as? Int == 120 && auto?["tolerance"] as? Int == 50 && auto?["lazy"] as? Bool == false, "automatic group is a native url-test over the candidates")
+        try check(output["PROXY"]?["default-selected"] as? String == ConfigurationBuilder.autoPolicy
+            && (output["PROXY"]?["proxies"] as? [String])?.first == ConfigurationBuilder.autoPolicy, "PROXY starts on the automatic group")
+        try check(output[ConfigurationBuilder.sourcePolicy(sourceID)]?["default-selected"] as? String == "PROXY", "subscription rules follow PROXY instead of the provider's first node")
+        profile.selectedNode = "Local"
+        output = try groups()
+        try check(ConfigurationBuilder.autoSelectCandidates(profile) == ["Local"]
+            && output[ConfigurationBuilder.sourcePolicy(sourceID)]?["proxies"] == nil, "a local selection anchors candidates to local nodes and leaves subscription groups alone")
+        profile.autoSelect.enabled = false
+        output = try groups()
+        try check(output[ConfigurationBuilder.autoPolicy] == nil && output["PROXY"]?["default-selected"] as? String == "Local"
+            && output["PROXY"]?["proxies"] as? [String] == ["Local"] + pool.map(\.name), "disabled automatic selection generates the previous manual PROXY group")
+        profile.autoSelect = AutoSelectSettings(enabled: true, interval: 7)
+        try rejects("unsupported automatic interval") { try ConfigurationBuilder.validate(profile) }
+        profile.autoSelect = AutoSelectSettings(enabled: true, candidateCount: 0)
+        try rejects("empty automatic candidate set") { try ConfigurationBuilder.validate(profile) }
+        let older = try JSONDecoder().decode(RuntimeProfile.self, from: Data(#"{"nodes":[]}"#.utf8))
+        try check(older.autoSelect == AutoSelectSettings(), "profiles without automatic selection decode with it off")
     }
 
     static func recoveryTests() throws {

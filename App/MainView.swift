@@ -74,6 +74,8 @@ private struct StatusBadge: View {
 }
 
 /// Errors and warnings need dismissal; success notices expire independently.
+/// No `.textSelection` here: selectable text in this bar, which is inserted and removed
+/// below the page, was sometimes drawn upside down. A copy button replaces selection.
 private struct MessageBar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var library: AppLibraryModel
@@ -83,8 +85,9 @@ private struct MessageBar: View {
             if let error = model.error ?? library.error {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(error).textSelection(.enabled).lineLimit(4)
+                    Text(error).lineLimit(4)
                     Spacer()
+                    copyButton(error)
                     Button("关闭") { model.dismissError() }.buttonStyle(.borderless)
                 }
                 .font(.callout).padding(.horizontal, 20).padding(.vertical, 12)
@@ -95,11 +98,12 @@ private struct MessageBar: View {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     ScrollView {
                         Text(model.pendingWarnings.joined(separator: "\n"))
-                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                            .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(height: min(CGFloat(model.pendingWarnings.count) * 48, 160))
                     Spacer()
+                    copyButton(model.pendingWarnings.joined(separator: "\n"))
                     Button("关闭警告") { model.dismissWarnings() }.buttonStyle(.borderless)
                 }
                 .font(.callout).padding(.horizontal, 20).padding(.vertical, 12)
@@ -108,7 +112,7 @@ private struct MessageBar: View {
             if model.error == nil, library.error == nil, !model.notice.isEmpty {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "info.circle.fill").foregroundStyle(.blue)
-                    Text(model.notice).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Text(model.notice).fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Button("关闭") { model.dismissNotice() }.buttonStyle(.borderless)
                 }
@@ -123,5 +127,12 @@ private struct MessageBar: View {
                 }
             }
         }
+    }
+
+    private func copyButton(_ text: String) -> some View {
+        Button("复制") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }.buttonStyle(.borderless)
     }
 }

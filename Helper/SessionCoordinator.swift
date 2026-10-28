@@ -232,13 +232,15 @@ final class SessionCoordinator: @unchecked Sendable {
                 let transaction = try safety.lock()
                 defer { transaction.release() }
                 let nodes = Set(desired.profile.nodes.map(\.name))
+                // The automatic group may be PROXY's current member, but is never a manual target.
+                let policies = nodes.union([ConfigurationBuilder.autoPolicy])
                 switch request.operation {
                 case .connections:
                     guard request.node == nil else { throw HelperFailure.refused("This inspection operation does not accept a node.") }
                     delivery.send(InspectionReply(connections: try core.connections()))
                 case .proxies:
                     guard request.node == nil else { throw HelperFailure.refused("This inspection operation does not accept a node.") }
-                    delivery.send(InspectionReply(proxies: try core.proxies(allowedNames: nodes.union(["PROXY", "GLOBAL", "DIRECT", "REJECT"]))))
+                    delivery.send(InspectionReply(proxies: try core.proxies(allowedNames: policies.union(["PROXY", "GLOBAL", "DIRECT", "REJECT"]))))
                 case .delay:
                     guard let node = request.node, nodes.contains(node) else {
                         throw HelperFailure.refused("Delay checks are limited to nodes in this validated session.")
@@ -248,9 +250,11 @@ final class SessionCoordinator: @unchecked Sendable {
                     guard let node = request.node, nodes.contains(node) else {
                         throw HelperFailure.refused("Node selection is limited to the PROXY group of this validated session.")
                     }
-                    try core.select(node: node, allowedNames: nodes)
+                    try core.select(node: node, allowedNames: policies)
                     selectedNode = node
                     self.desired?.profile.selectedNode = node
+                    // A manual choice wins over automatic selection until the next apply.
+                    self.desired?.profile.autoSelect.enabled = false
                     status.message = "The selected proxy node was confirmed by the core."
                     delivery.send(InspectionReply(status: status))
                 }
@@ -541,10 +545,16 @@ final class SessionCoordinator: @unchecked Sendable {
     }
 
     private func restoreSelection(in profile: RuntimeProfile) throws {
-        guard let selectedNode = profile.selectedNode ?? selectedNode else { return }
         let names = Set(profile.nodes.map(\.name))
+        // A reload starts PROXY at the automatic group when the configuration has one.
+        let policies = names.union([ConfigurationBuilder.autoPolicy])
+        if !ConfigurationBuilder.autoSelectCandidates(profile).isEmpty {
+            try core.select(node: ConfigurationBuilder.autoPolicy, allowedNames: policies)
+            return
+        }
+        guard let selectedNode = profile.selectedNode ?? selectedNode else { return }
         if names.contains(selectedNode) {
-            try core.select(node: selectedNode, allowedNames: names)
+            try core.select(node: selectedNode, allowedNames: policies)
             self.selectedNode = selectedNode
         }
         else { self.selectedNode = nil }

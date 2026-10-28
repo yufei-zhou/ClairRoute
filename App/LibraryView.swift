@@ -42,20 +42,36 @@ struct LibraryView: View {
                 }
             }
             if library.nodes.isEmpty {
+                // ContentUnavailableView is not greedy on macOS; without a flexible frame the
+                // whole page collapsed and floated in the middle of the window.
                 ContentUnavailableView {
                     Label("还没有节点", systemImage: "server.rack")
+                } description: {
+                    Text("添加订阅，或导入 ss://、vmess://、vless:// 链接和 Clash YAML。")
                 } actions: {
-                    Button("导入 URI / YAML") { importError = nil; importing = true }
                     Button("添加订阅") { subscriptionSheet = true }
+                    Button("导入 URI / YAML") { importError = nil; importing = true }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                AutoSelectPanel(model: model, library: library)
+                let candidates = Set(library.autoSelectCandidates)
+                let automatic = !candidates.isEmpty
                 List {
                     ForEach(library.nodes.filter { filter.isEmpty || $0.name.localizedCaseInsensitiveContains(filter) }, id: \.id) { node in
+                        let inUse = automatic ? model.autoSelectedNode == node.name : library.selectedNode == node.name
                         HStack(spacing: 12) {
-                            Image(systemName: library.selectedNode == node.name ? "checkmark.circle.fill" : "circle").foregroundStyle(library.selectedNode == node.name ? Color.accentColor : .secondary)
+                            Image(systemName: inUse ? "checkmark.circle.fill" : "circle").foregroundStyle(inUse ? Color.accentColor : .secondary)
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(model.policyLabel(node.name)).font(.headline)
+                                HStack(spacing: 6) {
+                                    Text(model.policyLabel(node.name)).font(.headline)
+                                    if candidates.contains(node.name) {
+                                        Text("自动候选").font(.caption2.weight(.medium)).foregroundStyle(Color.accentColor)
+                                            .padding(.horizontal, 5).padding(.vertical, 1)
+                                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                                    }
+                                }
                                 Text("\(node.type.rawValue.uppercased()) · \(node.server):\(node.port)").font(.caption).foregroundStyle(.secondary)
                             }.accessibilityElement(children: .combine)
                             Spacer()
@@ -64,10 +80,13 @@ struct LibraryView: View {
                             Button("测速") { Task { await model.measureDelay(node.name) } }.disabled(!model.status.coreRunning || !model.nodeIsEnabled(node))
                                 .accessibilityLabel("测速 " + node.name)
                                 .accessibilityIdentifier("node.delay." + node.id.uuidString)
-                            Button(library.selectedNode == node.name ? "已选择" : "使用") { Task { await model.chooseNode(node.name) } }
-                                .disabled(model.busy || library.selectedNode == node.name || !model.nodeIsEnabled(node))
+                            // While automatic selection is on, any node can be chosen to switch back to manual.
+                            let chosen = !automatic && library.selectedNode == node.name
+                            Button(chosen ? "已选择" : "使用") { Task { await model.chooseNode(node.name) } }
+                                .disabled(model.busy || chosen || !model.nodeIsEnabled(node))
+                                .help(automatic ? "改为手动使用此节点，并关闭自动选择" : "")
                                 .accessibilityLabel("选择 " + node.name)
-                                .accessibilityValue(library.selectedNode == node.name ? "已选中" : "未选中")
+                                .accessibilityValue(inUse ? "已选中" : "未选中")
                                 .accessibilityIdentifier("node.select." + node.id.uuidString)
                             Button(node.sourceID == nil ? "编辑" : "复制") {
                                 do {
@@ -87,6 +106,7 @@ struct LibraryView: View {
                 }.listStyle(.inset)
             }
         }.padding(22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sheet(item: $editor) { node in NodeEditorView(node: node) { value in
             try library.saveNode(value); model.error = nil
         } }
@@ -126,6 +146,56 @@ struct LibraryView: View {
         if let total = info.total { result += " / " + ByteCountFormatter.string(fromByteCount: Int64(clamping: total), countStyle: .binary) }
         if let expiry = info.expire { result += " · 到期 " + expiry.formatted(date: .abbreviated, time: .omitted) }
         return result
+    }
+}
+
+/// Automatic selection among the first nodes of the selected node's subscription.
+private struct AutoSelectPanel: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var library: AppLibraryModel
+
+    var body: some View {
+        let settings = library.autoSelect
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 18) {
+                Toggle("自动选择节点", isOn: binding(\.enabled)).toggleStyle(.switch)
+                Stepper("候选：前 \(settings.candidateCount) 个", value: binding(\.candidateCount), in: AutoSelectSettings.candidateRange)
+                    .fixedSize()
+                Picker("检测间隔", selection: binding(\.interval)) {
+                    ForEach(AutoSelectSettings.intervals, id: \.self) { Text(intervalLabel($0)).tag($0) }
+                }.fixedSize()
+                Spacer()
+                if model.busy { ProgressView().controlSize(.small) }
+            }
+            .disabled(model.busy)
+            Text(detail(settings)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func binding<Value>(_ keyPath: WritableKeyPath<AutoSelectSettings, Value>) -> Binding<Value> {
+        Binding(get: { library.autoSelect[keyPath: keyPath] }, set: { value in
+            var next = library.autoSelect
+            next[keyPath: keyPath] = value
+            Task { await model.setAutoSelect(next) }
+        })
+    }
+
+    private func intervalLabel(_ seconds: Int) -> String {
+        seconds < 60 || !seconds.isMultiple(of: 60) ? "\(seconds) 秒" : "\(seconds / 60) 分钟"
+    }
+
+    private func detail(_ settings: AutoSelectSettings) -> String {
+        let candidates = library.autoSelectCandidates
+        guard settings.enabled, let first = candidates.first else {
+            return "开启后，内核定期测试当前节点所在订阅中排在最前面的 \(settings.candidateCount) 个节点，始终使用延迟最低且可用的一个；当前节点连续失败时会立即重新检测。排在后面的节点（例如低倍率节点）不参与。"
+        }
+        let source = library.nodes.first(where: { $0.name == first })?.sourceID
+        let group = source.flatMap { id in library.subscriptions.first(where: { $0.id == id })?.name } ?? "本地节点"
+        let current = model.status.coreRunning
+            ? "当前使用：" + (model.autoSelectedNode ?? "检测中…")
+            : "开启代理后生效"
+        return "\(current) · 每 \(intervalLabel(settings.interval))在「\(group)」的 \(candidates.count) 个候选中选延迟最低的：" + candidates.joined(separator: "、")
     }
 }
 

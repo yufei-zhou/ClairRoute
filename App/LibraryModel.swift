@@ -10,6 +10,7 @@ final class AppLibraryModel: ObservableObject {
     @Published private(set) var fallbackPolicy = "DIRECT"
     @Published private(set) var selectedNode: String?
     @Published private(set) var advancedYAML = ""
+    @Published private(set) var autoSelect = AutoSelectSettings()
     @Published private(set) var notice: String?
     @Published private(set) var warnings: [String] = []
     @Published private(set) var error: String?
@@ -243,9 +244,23 @@ final class AppLibraryModel: ObservableObject {
         var next = store.snapshot; next.fallbackPolicy = policy
         try validate(next); try commit(next)
     }
+    /// A manual choice also turns automatic selection off.
     func selectNode(_ name: String?) throws {
-        var next = store.snapshot; next.selectedNode = name
+        var next = store.snapshot; next.selectedNode = name; next.autoSelect.enabled = false
         try validate(next); try commit(next)
+    }
+    func setAutoSelect(_ settings: AutoSelectSettings) throws {
+        var next = store.snapshot; next.autoSelect = settings
+        try validate(next); try commit(next)
+    }
+    /// Node names the core will compare, in order; empty when automatic selection is off.
+    var autoSelectCandidates: [String] {
+        guard autoSelect.enabled else { return [] }
+        let snapshot = store.snapshot
+        let enabled = Set(snapshot.subscriptions.filter(\.enabled).map(\.id))
+        let active = snapshot.nodes.filter { $0.sourceID.map(enabled.contains) ?? true }
+        return ConfigurationBuilder.autoSelectCandidates(names: active.map(\.name), sources: active.map(\.sourceID),
+                                                         selected: snapshot.selectedNode, count: autoSelect.candidateCount)
     }
     func saveAdvancedYAML(_ text: String) throws {
         var next = store.snapshot
@@ -372,6 +387,7 @@ final class AppLibraryModel: ObservableObject {
         pendingSecretCleanup = snapshot.pendingSecretIDs.count
         migrationRequired = store.migrationRequired
         advancedYAML = canonicalAdvanced(snapshot.advanced)
+        autoSelect = snapshot.autoSelect
         if let warning = store.warning { warnings = [warning] }
     }
     private func canonicalAdvanced(_ value: AdvancedOptions) -> String { value.yamlString }

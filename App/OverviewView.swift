@@ -7,6 +7,13 @@ struct OverviewView: View {
 
     private var editingLocked: Bool { model.busy || library.migrationRequired }
 
+    private var currentNode: String {
+        if library.autoSelect.enabled, !library.autoSelectCandidates.isEmpty {
+            return "自动选择" + (model.autoSelectedNode.map { "：" + $0 } ?? "")
+        }
+        return (library.selectedNode ?? library.nodes.first(where: model.nodeIsEnabled)?.name).map(model.policyLabel) ?? "尚未添加"
+    }
+
     var body: some View {
         Form {
             Section {
@@ -46,7 +53,7 @@ struct OverviewView: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(editingLocked)
-                LabeledContent("当前节点", value: (library.selectedNode ?? library.nodes.first(where: model.nodeIsEnabled)?.name).map(model.policyLabel) ?? "尚未添加")
+                LabeledContent("当前节点", value: currentNode)
                 LabeledContent("规则", value: "\(library.rules.count) 条自定义规则 · 其余流量 \(model.policyLabel(library.fallbackPolicy))")
             } header: {
                 Text("出站策略")

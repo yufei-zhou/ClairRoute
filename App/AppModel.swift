@@ -27,6 +27,9 @@ import Combine
     @Published var connections: [ConnectionSnapshot] = []
     @Published var connectionPanelVisible = false
     @Published var delays: [String: String] = [:]
+    /// The node the core's automatic group currently uses; nil when unknown or not in use.
+    @Published private(set) var autoSelectedNode: String?
+    private var pollCount = 0
     @Published var selectedPage: AppPage = .overview
     var signed: Bool { HelperClient.hasSigningIdentity }
     var phaseLabel: String {
@@ -73,6 +76,7 @@ import Combine
     }
     /// Human-readable name for a policy; subscription groups are shown by subscription name.
     func policyLabel(_ policy: String) -> String {
+        if policy == ConfigurationBuilder.autoPolicy { return "自动选择" }
         if let subscription = library.subscriptions.first(where: { ConfigurationBuilder.sourcePolicy($0.id) == policy }) {
             return "订阅：" + subscription.name + (subscription.enabled ? "" : "（已停用）")
         }
@@ -122,6 +126,11 @@ import Combine
                             let rows = try await self.client.connections()
                             if !self.busy { self.connections = rows }
                         }
+                        self.pollCount += 1
+                        if self.library.autoSelect.enabled && self.status.coreRunning && !self.busy
+                            && self.pollCount % 3 == 0 {
+                            await self.refreshAutoSelection()
+                        }
                     } catch {
                         if !self.busy {
                             if let actual = (error as? ClientError)?.reportedStatus { self.accept(actual) }
@@ -137,7 +146,14 @@ import Combine
     private func accept(_ next: ServiceStatus) {
         status = next; generation = max(generation, next.generation)
         helperConnected = true; unconfirmed = false
-        if !next.coreRunning { connections = []; activeTrialMode = false }
+        if !next.coreRunning { connections = []; activeTrialMode = false; autoSelectedNode = nil }
+    }
+    /// Reads which candidate the core's url-test group picked. Failures only clear the display.
+    private func refreshAutoSelection() async {
+        guard let groups = try? await client.proxies() else { autoSelectedNode = nil; return }
+        let proxy = groups.first(where: { $0.name == "PROXY" })?.selected
+        autoSelectedNode = proxy == ConfigurationBuilder.autoPolicy
+            ? groups.first(where: { $0.name == ConfigurationBuilder.autoPolicy })?.selected : nil
     }
     func refreshStatus() async {
         guard !busy else { return }
@@ -197,11 +213,13 @@ import Combine
         guard !busy else { return }
         busy = true; defer { busy = false }
         let previous = library.selectedNode ?? library.nodes.first?.name
+        // The automatic group cannot be a manual target; on a failed save the core keeps the new node.
+        let wasAutomatic = library.autoSelect.enabled
         do {
             if status.coreRunning { accept(try await client.select(node: name)) }
             do { try library.selectNode(name) }
             catch {
-                if status.coreRunning, let previous {
+                if status.coreRunning, !wasAutomatic, let previous {
                     do { accept(try await client.select(node: previous)) }
                     catch {
                         do { accept(try await client.stop()) }
@@ -211,7 +229,8 @@ import Combine
                 }
                 throw error
             }
-            error = nil; notice = "已选择节点：\(name)"
+            autoSelectedNode = nil
+            error = nil; notice = wasAutomatic ? "已改为手动选择节点：\(name)" : "已选择节点：\(name)"
         } catch {
             self.error = error.localizedDescription
             if let actual = (error as? ClientError)?.reportedStatus { accept(actual) }
@@ -219,6 +238,25 @@ import Combine
                 if let actual = try? await client.status() { accept(actual) }
                 else { unconfirmed = true; helperConnected = false }
             }
+        }
+    }
+    /// Saves automatic selection and, while proxying, reloads the core so it takes effect now.
+    func setAutoSelect(_ settings: AutoSelectSettings) async {
+        guard !busy else { return }
+        let previous = library.autoSelect
+        do { try library.setAutoSelect(settings) }
+        catch { self.error = error.localizedDescription; return }
+        autoSelectedNode = nil
+        guard status.coreRunning else {
+            notice = settings.enabled ? "已开启自动选择；开启代理时生效。" : "已关闭自动选择。"
+            return
+        }
+        if await apply(tun: status.tunEnabled, proxy: status.systemProxyEnabled) {
+            notice = settings.enabled ? "已开启自动选择，内核会每 \(settings.interval) 秒检测一次延迟。" : "已关闭自动选择，改用手动选择的节点。"
+            if settings.enabled { await refreshAutoSelection() }
+        } else {
+            // Keep the saved setting in line with what the running core actually uses.
+            try? library.setAutoSelect(previous)
         }
     }
     func measureDelay(_ name: String) async {

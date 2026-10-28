@@ -163,6 +163,28 @@ public struct ProxyNode: Codable, Identifiable, Sendable {
     }
 }
 
+/// Automatic failover: the core keeps PROXY on the lowest-latency node among the
+/// first `candidateCount` nodes of the selected node's subscription (or local nodes).
+public struct AutoSelectSettings: Codable, Sendable, Equatable {
+    public static let candidateRange = 2...20
+    public static let intervals = [60, 120, 300, 600]
+    public var enabled: Bool
+    public var candidateCount: Int
+    /// Seconds between latency checks. A failing node also triggers an immediate check.
+    public var interval: Int
+
+    public init(enabled: Bool = false, candidateCount: Int = 5, interval: Int = 120) {
+        self.enabled = enabled; self.candidateCount = candidateCount; self.interval = interval
+    }
+    private enum CodingKeys: String, CodingKey { case enabled, candidateCount, interval }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(enabled: try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false,
+                  candidateCount: try c.decodeIfPresent(Int.self, forKey: .candidateCount) ?? 5,
+                  interval: try c.decodeIfPresent(Int.self, forKey: .interval) ?? 120)
+    }
+}
+
 public struct RuntimeProfile: Codable, Sendable {
     public var nodes: [ProxyNode]
     public var mode: OutboundMode
@@ -171,20 +193,21 @@ public struct RuntimeProfile: Codable, Sendable {
     public var fallbackPolicy: String
     public var selectedNode: String?
     public var advanced: AdvancedOptions
+    public var autoSelect: AutoSelectSettings
 
     public init(nodes: [ProxyNode] = [], mode: OutboundMode = .rule,
                 chatGPTOnly: Bool = true, rules: [RoutingRule]? = nil,
                 fallbackPolicy: String = "DIRECT", selectedNode: String? = nil,
-                advanced: AdvancedOptions = .init()) {
+                advanced: AdvancedOptions = .init(), autoSelect: AutoSelectSettings = .init()) {
         self.nodes = nodes
         self.mode = mode
         self.chatGPTOnly = chatGPTOnly
         self.rules = rules ?? (chatGPTOnly ? [.chatGPT] : [])
         self.fallbackPolicy = !chatGPTOnly && rules == nil ? "PROXY" : fallbackPolicy
-        self.selectedNode = selectedNode; self.advanced = advanced
+        self.selectedNode = selectedNode; self.advanced = advanced; self.autoSelect = autoSelect
     }
     private enum CodingKeys: String, CodingKey {
-        case nodes, mode, chatGPTOnly, rules, fallbackPolicy, selectedNode, advanced
+        case nodes, mode, chatGPTOnly, rules, fallbackPolicy, selectedNode, advanced, autoSelect
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -194,7 +217,8 @@ public struct RuntimeProfile: Codable, Sendable {
                   rules: try c.decodeIfPresent([RoutingRule].self, forKey: .rules),
                   fallbackPolicy: try c.decodeIfPresent(String.self, forKey: .fallbackPolicy) ?? "DIRECT",
                   selectedNode: try c.decodeIfPresent(String.self, forKey: .selectedNode),
-                  advanced: try c.decodeIfPresent(AdvancedOptions.self, forKey: .advanced) ?? .init())
+                  advanced: try c.decodeIfPresent(AdvancedOptions.self, forKey: .advanced) ?? .init(),
+                  autoSelect: try c.decodeIfPresent(AutoSelectSettings.self, forKey: .autoSelect) ?? .init())
     }
 }
 

@@ -67,6 +67,7 @@ struct LibrarySnapshot: Codable, Sendable {
     var fallbackPolicy = "DIRECT"
     var selectedNode: String?
     var advanced = AdvancedOptions()
+    var autoSelect = AutoSelectSettings()
     var pendingSecretIDs: [UUID] = []
     // Optional only for decoding v2; v3 requires complete, typed plaintext dictionaries.
     var nodeSecrets: [String: ProxyNode]? = [:]
@@ -81,7 +82,7 @@ struct LibrarySnapshot: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, nodes, subscriptions, rules, subscriptionRules, fallbackPolicy, selectedNode
-        case advanced, pendingSecretIDs, nodeSecrets, subscriptionSecrets, legacyProfile
+        case advanced, autoSelect, pendingSecretIDs, nodeSecrets, subscriptionSecrets, legacyProfile
     }
 }
 
@@ -115,7 +116,8 @@ extension LibrarySnapshot {
         }
         return RuntimeProfile(nodes: activeNodes, mode: mode, rules: activeRules,
                               fallbackPolicy: unavailable.contains(fallbackPolicy) ? "DIRECT" : fallbackPolicy,
-                              selectedNode: hasDisabledSelection ? nil : selectedNode, advanced: advanced)
+                              selectedNode: hasDisabledSelection ? nil : selectedNode, advanced: advanced,
+                              autoSelect: autoSelect)
     }
 
     /// Missing keys fall back to defaults so that adding a field never makes an existing profile unreadable.
@@ -130,6 +132,7 @@ extension LibrarySnapshot {
         fallbackPolicy = try c.decodeIfPresent(String.self, forKey: .fallbackPolicy) ?? "DIRECT"
         selectedNode = try c.decodeIfPresent(String.self, forKey: .selectedNode)
         advanced = try c.decodeIfPresent(AdvancedOptions.self, forKey: .advanced) ?? AdvancedOptions()
+        autoSelect = try c.decodeIfPresent(AutoSelectSettings.self, forKey: .autoSelect) ?? AutoSelectSettings()
         pendingSecretIDs = try c.decodeIfPresent([UUID].self, forKey: .pendingSecretIDs) ?? []
         nodeSecrets = try c.decodeIfPresent([String: ProxyNode].self, forKey: .nodeSecrets)
         subscriptionSecrets = try c.decodeIfPresent([String: SubscriptionSecret].self, forKey: .subscriptionSecrets)

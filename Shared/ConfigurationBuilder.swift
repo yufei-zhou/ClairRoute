@@ -13,6 +13,25 @@ public enum ConfigurationBuilder {
     public static let maximumNodes = 512
     public static let maximumRules = 2_048
     public static func sourcePolicy(_ id: UUID) -> String { "SUB_" + id.uuidString.lowercased() }
+    /// Node names may not start with NODE_, and internal node names are NODE_ plus a lowercase UUID.
+    public static let autoPolicy = "NODE_AUTO"
+    public static let autoSelectTestURL = "https://www.gstatic.com/generate_204"
+    /// The group (subscription ID, or nil for local nodes) of the selected node, else of the first node.
+    public static func anchorSource(names: [String], sources: [UUID?], selected: String?) -> UUID?? {
+        guard let index = selected.flatMap(names.firstIndex(of:)) ?? (names.isEmpty ? nil : 0) else { return nil }
+        return .some(sources[index])
+    }
+    /// The first nodes of the anchor's group, in saved (subscription) order.
+    public static func autoSelectCandidates(names: [String], sources: [UUID?], selected: String?, count: Int) -> [String] {
+        guard let anchor = anchorSource(names: names, sources: sources, selected: selected) else { return [] }
+        return Array(zip(names, sources).filter { $0.1 == anchor }.prefix(count).map { $0.0 })
+    }
+    /// Empty when automatic selection is off.
+    public static func autoSelectCandidates(_ profile: RuntimeProfile) -> [String] {
+        guard profile.autoSelect.enabled else { return [] }
+        return autoSelectCandidates(names: profile.nodes.map(\.name), sources: profile.nodes.map(\.sourceID),
+                                    selected: profile.selectedNode, count: profile.autoSelect.candidateCount)
+    }
     public static func orderedRules(_ rules: [RoutingRule]) -> [RoutingRule] {
         rules.filter { $0.sourceID == nil } + rules.filter { $0.sourceID != nil }
     }
@@ -31,6 +50,8 @@ public enum ConfigurationBuilder {
         let allowed = Set(policies(for: profile.nodes))
         guard allowed.contains(profile.fallbackPolicy) else { throw invalid("兜底策略不存在。") }
         if let selected = profile.selectedNode, !profile.nodes.contains(where: { $0.name == selected }) { throw invalid("选中的节点不存在。") }
+        guard AutoSelectSettings.candidateRange.contains(profile.autoSelect.candidateCount),
+              AutoSelectSettings.intervals.contains(profile.autoSelect.interval) else { throw invalid("自动选择的候选数量或检测间隔无效。") }
         var ruleIDs = Set<UUID>()
         for rule in profile.rules {
             guard ruleIDs.insert(rule.id).inserted else { throw invalid("规则标识重复。") }
@@ -139,11 +160,26 @@ public enum ConfigurationBuilder {
             let internalName = "NODE_" + node.id.uuidString.lowercased()
             return ["name": node.name, "type": "select", "use": [provider], "filter": "^" + internalName + "$", "default-selected": internalName]
         }
+        // nil when PROXY is anchored to a local node (or there are no nodes).
+        let anchorSubscription = anchorSource(names: profile.nodes.map(\.name), sources: profile.nodes.map(\.sourceID),
+                                              selected: profile.selectedNode) ?? nil
         for id in Set(profile.nodes.compactMap(\.sourceID)).sorted(by: { $0.uuidString < $1.uuidString }) {
-            groups.append(["name": sourcePolicy(id), "type": "select", "use": ["provider-" + id.uuidString.lowercased()]])
+            var group: [String: Any] = ["name": sourcePolicy(id), "type": "select", "use": ["provider-" + id.uuidString.lowercased()]]
+            // Subscription rules target "the node you chose". A select group otherwise starts at
+            // the provider's first entry (often an info or dead node) after every core reload.
+            if anchorSubscription == id { group["proxies"] = ["PROXY"]; group["default-selected"] = "PROXY" }
+            groups.append(group)
         }
         let names = profile.nodes.isEmpty ? ["REJECT"] : profile.nodes.map(\.name)
-        groups.append(["name": "PROXY", "type": "select", "proxies": names, "default-selected": profile.selectedNode ?? names[0]])
+        let candidates = autoSelectCandidates(profile)
+        if !candidates.isEmpty {
+            // Native url-test: the core measures and fails over even while the GUI is closed.
+            // A connection failure on the current node triggers an extra check before the interval.
+            groups.append(["name": autoPolicy, "type": "url-test", "proxies": candidates, "url": autoSelectTestURL,
+                           "interval": profile.autoSelect.interval, "timeout": 5_000, "tolerance": 50, "lazy": false])
+        }
+        groups.append(["name": "PROXY", "type": "select", "proxies": (candidates.isEmpty ? [] : [autoPolicy]) + names,
+                       "default-selected": candidates.isEmpty ? (profile.selectedNode ?? names[0]) : autoPolicy])
         groups.append(["name": "GLOBAL", "type": "select", "proxies": ["PROXY"], "default-selected": "PROXY"])
         let options = profile.advanced
         let rules = orderedRules(profile.rules).filter(\.enabled).map { "\($0.kind.rawValue),\($0.value),\($0.policy)" } + ["MATCH,\(profile.fallbackPolicy)"]

@@ -64,7 +64,7 @@ struct ConnectionsView: View {
         // Preserve the original data, and keep a useful fallback if there is no
         // readable wrapper in an incomplete core snapshot.
         let display = visible.isEmpty ? chains : visible
-        return display.isEmpty ? "未识别" : display.joined(separator: " → ")
+        return display.isEmpty ? "未识别" : display.map(model.policyLabel).joined(separator: " → ")
     }
     private func bytes(_ count: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(clamping: count), countStyle: .binary) }
 }

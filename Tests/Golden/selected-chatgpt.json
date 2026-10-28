@@ -26,7 +26,7 @@
   "proxies": [],
   "proxy-groups": [
     {"default-selected": "NODE_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "filter": "^NODE_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee$", "name": "Golden SS", "type": "select", "use": ["provider-11111111-2222-3333-4444-555555555555"]},
-    {"name": "SUB_11111111-2222-3333-4444-555555555555", "type": "select", "use": ["provider-11111111-2222-3333-4444-555555555555"]},
+    {"default-selected": "PROXY", "name": "SUB_11111111-2222-3333-4444-555555555555", "proxies": ["PROXY"], "type": "select", "use": ["provider-11111111-2222-3333-4444-555555555555"]},
     {"default-selected": "Golden SS", "name": "PROXY", "proxies": ["Golden SS"], "type": "select"},
     {"default-selected": "PROXY", "name": "GLOBAL", "proxies": ["PROXY"], "type": "select"}
   ],
