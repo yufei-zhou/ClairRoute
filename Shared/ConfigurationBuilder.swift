@@ -174,7 +174,7 @@ public enum ConfigurationBuilder {
         let candidates = autoSelectCandidates(profile)
         if !candidates.isEmpty {
             // Native url-test: the core measures and fails over even while the GUI is closed.
-            // A connection failure on the current node triggers an extra check before the interval.
+            // The core may also check after connection failures; switching has 50 ms hysteresis.
             groups.append(["name": autoPolicy, "type": "url-test", "proxies": candidates, "url": autoSelectTestURL,
                            "interval": profile.autoSelect.interval, "timeout": 5_000, "tolerance": 50, "lazy": false])
         }

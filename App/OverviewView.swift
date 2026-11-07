@@ -59,6 +59,24 @@ struct OverviewView: View {
                 Text("出站策略")
             }
 
+            Section("启动") {
+                Toggle("登录时启动 ClairRoute", isOn: Binding(get: { model.launchAtLogin }, set: { value in
+                    Task { await model.setLaunchAtLogin(value) }
+                }))
+                Picker("打开应用后", selection: Binding(get: { model.launchConnection }, set: model.setLaunchConnection)) {
+                    ForEach(LaunchConnection.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .help("下次完整启动应用时生效，包括登录启动；重新打开已有窗口不会重新连接。")
+                if model.launchConnection == .automatic {
+                    LabeledContent("连接方式", value: model.startupTakeover.title)
+                        .help("使用上次成功连接的方式；尚无记录时使用增强模式（TUN）。限时验收不会改变这项记录。")
+                }
+                if model.loginStatus == .requiresApproval {
+                    Button("在系统设置中允许登录启动") { model.openLoginSettings() }
+                }
+            }.disabled(!model.signed || editingLocked)
+
             Section("后台服务") {
                 LabeledContent("Helper", value: !model.signed ? "未安装" : (model.helperConnected ? "已连接并验证签名" : "未连接"))
                 LabeledContent("内核", value: model.status.coreRunning ? "mihomo " + (model.status.coreVersion ?? AppConstants.coreVersion) : "未运行")

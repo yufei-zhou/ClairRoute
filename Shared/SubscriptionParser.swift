@@ -5,8 +5,10 @@ public struct ParsedSubscription: Sendable {
     public var nodes: [ProxyNode]
     public var rules: [RoutingRule]
     public var warnings: [String]
-    public init(nodes: [ProxyNode], rules: [RoutingRule] = [], warnings: [String] = []) {
-        self.nodes = nodes; self.rules = rules; self.warnings = warnings
+    /// Expected normalization of a provider template; these are not import failures.
+    public var notes: [String]
+    public init(nodes: [ProxyNode], rules: [RoutingRule] = [], warnings: [String] = [], notes: [String] = []) {
+        self.nodes = nodes; self.rules = rules; self.warnings = warnings; self.notes = notes
     }
 }
 
@@ -95,8 +97,9 @@ public enum SubscriptionParser {
                 }
             }
         }
-        var warnings = declaredGroups.isEmpty ? [] : ["订阅代理组已合并为此订阅的节点组；自动测速 URL 和组行为不会导入。"]
-        if !Set(root.keys).isDisjoint(with: ignored) { warnings.append("订阅模板中的端口、DNS、TUN、模式等运行选项已忽略；使用 ClairRoute 本地设置。") }
+        var warnings: [String] = []
+        var notes = declaredGroups.isEmpty ? [] : ["订阅代理组已合并为此订阅的节点组；自动测速 URL 和组行为不会导入。"]
+        if !Set(root.keys).isDisjoint(with: ignored) { notes.append("订阅模板中的端口、DNS、TUN、模式等运行选项已忽略；使用 ClairRoute 本地设置。") }
         var rules = [RoutingRule]()
         if let value = root["rules"] {
             guard let entries = value.array, entries.count <= ConfigurationBuilder.maximumRules else { throw fail("订阅规则数量无效。") }
@@ -106,7 +109,7 @@ public enum SubscriptionParser {
                 let fields = raw.split(separator: ",", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
                 if fields.first == "MATCH" {
                     guard fields.count == 2 else { throw fail("MATCH 规则格式无效。") }
-                    if !warnings.contains("订阅 MATCH 已忽略；兜底策略由用户设置。") { warnings.append("订阅 MATCH 已忽略；兜底策略由用户设置。") }
+                    if !notes.contains("订阅 MATCH 已忽略；兜底策略由用户设置。") { notes.append("订阅 MATCH 已忽略；兜底策略由用户设置。") }
                     continue
                 }
                 if fields.count >= 3, RuleKind(rawValue: fields[0]) == nil {
@@ -124,7 +127,7 @@ public enum SubscriptionParser {
                 try ConfigurationBuilder.validateRule(rule); rules.append(rule)
             }
         }
-        return try checked(ParsedSubscription(nodes: nodes, rules: rules, warnings: warnings))
+        return try checked(ParsedSubscription(nodes: nodes, rules: rules, warnings: warnings, notes: notes))
     }
 
     public static func parseURI(_ uri: String, sourceID: UUID? = nil) throws -> ProxyNode {

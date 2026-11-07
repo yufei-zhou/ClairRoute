@@ -71,6 +71,7 @@ struct AdvancedView: View {
         }
         guard await model.stopAndRestore() else { return }
         do {
+            try await model.removeStartupSettings()
             try library.removeAllData()
             if NSWorkspace.shared.open(scripts.appendingPathComponent("Uninstall ClairRoute.command")) { NSApp.terminate(nil) }
             else { model.error = "无法打开卸载终端；网络已恢复，请手动运行卸载脚本。" }

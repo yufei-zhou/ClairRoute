@@ -23,9 +23,10 @@ for directory in ['App','Shared','Helper']:
     for p in sorted((root/directory).glob('*.swift')):
         path=p.relative_to(root).as_posix()
         refs[path]=obj(path,'PBXFileReference',lastKnownFileType='sourcecode.swift',path=path,sourceTree='<group>')
-resources=['Resources/mihomo','Resources/CoreManifest.json','Resources/mihomo-LICENSE','Resources/THIRD-PARTY-NOTICES.txt','Resources/geosite.dat','Resources/GeoManifest.json','README.md']
+resources=['Resources/mihomo','Resources/CoreManifest.json','Resources/mihomo-LICENSE','Resources/THIRD-PARTY-NOTICES.txt','Resources/geosite.dat','Resources/GeoManifest.json','Resources/AppIcon.icns','README.md']
 for path in resources+['Resources/local.nano.ClairRoute.Helper.plist','Resources/local.nano.ClairRoute.RecoveryGuard.plist']:
-    refs[path]=obj(path,'PBXFileReference',lastKnownFileType='text' if not path.endswith('mihomo') else 'compiled.mach-o.executable',path=path,sourceTree='<group>')
+    filetype = 'image.icns' if path.endswith('.icns') else ('compiled.mach-o.executable' if path.endswith('mihomo') else 'text')
+    refs[path]=obj(path,'PBXFileReference',lastKnownFileType=filetype,path=path,sourceTree='<group>')
 appProduct=obj('AppProduct','PBXFileReference',explicitFileType='wrapper.application',includeInIndex=0,path='ClairRoute.app',sourceTree='BUILT_PRODUCTS_DIR')
 helperProduct=obj('HelperProduct','PBXFileReference',explicitFileType='compiled.mach-o.executable',includeInIndex=0,path='ClairRouteHelper',sourceTree='BUILT_PRODUCTS_DIR')
 guardProduct=obj('GuardProduct','PBXFileReference',explicitFileType='compiled.mach-o.executable',includeInIndex=0,path='ClairRouteRecoveryGuard',sourceTree='BUILT_PRODUCTS_DIR')

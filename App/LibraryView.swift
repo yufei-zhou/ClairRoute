@@ -66,6 +66,7 @@ struct LibraryView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 6) {
                                     Text(model.policyLabel(node.name)).font(.headline)
+                                        .lineLimit(1).truncationMode(.middle).help(model.policyLabel(node.name))
                                     if candidates.contains(node.name) {
                                         Text("自动候选").font(.caption2.weight(.medium)).foregroundStyle(Color.accentColor)
                                             .padding(.horizontal, 5).padding(.vertical, 1)
@@ -73,16 +74,18 @@ struct LibraryView: View {
                                     }
                                 }
                                 Text("\(node.type.rawValue.uppercased()) · \(node.server):\(node.port)").font(.caption).foregroundStyle(.secondary)
-                            }.accessibilityElement(children: .combine)
-                            Spacer()
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityElement(children: .combine)
                             Text(model.delays[node.name] ?? "—").monospacedDigit().font(.caption).frame(width: 70)
                                 .accessibilityLabel("延迟：" + (model.delays[node.name] ?? "尚未测速"))
                             Button("测速") { Task { await model.measureDelay(node.name) } }.disabled(!model.status.coreRunning || !model.nodeIsEnabled(node))
+                                .frame(width: 50)
                                 .accessibilityLabel("测速 " + node.name)
                                 .accessibilityIdentifier("node.delay." + node.id.uuidString)
                             // While automatic selection is on, any node can be chosen to switch back to manual.
                             let chosen = !automatic && library.selectedNode == node.name
                             Button(chosen ? "已选择" : "使用") { Task { await model.chooseNode(node.name) } }
+                                .frame(width: 50)
                                 .disabled(model.busy || chosen || !model.nodeIsEnabled(node))
                                 .help(automatic ? "改为手动使用此节点，并关闭自动选择" : "")
                                 .accessibilityLabel("选择 " + node.name)
@@ -94,7 +97,7 @@ struct LibraryView: View {
                                     if value.sourceID != nil { value.id = UUID(); value.sourceID = nil; value.name += "（副本）" }
                                     editor = value
                                 } catch { model.error = error.localizedDescription }
-                            }.accessibilityLabel((node.sourceID == nil ? "编辑 " : "复制 ") + node.name)
+                            }.frame(width: 50).accessibilityLabel((node.sourceID == nil ? "编辑 " : "复制 ") + node.name)
                             Button(role: .destructive) { model.perform { try library.removeNode(id: node.id) } } label: { Image(systemName: "trash") }
                                 .help("删除节点；订阅节点请通过订阅管理").disabled(node.sourceID != nil)
                                 .accessibilityLabel("删除节点 " + node.name)
@@ -159,6 +162,7 @@ private struct AutoSelectPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 18) {
                 Toggle("自动选择节点", isOn: binding(\.enabled)).toggleStyle(.switch)
+                    .help("定期检测当前订阅的前几个节点；保留 50 ms 容差，减少频繁切换。不会自动开启代理。")
                 Stepper("候选：前 \(settings.candidateCount) 个", value: binding(\.candidateCount), in: AutoSelectSettings.candidateRange)
                     .fixedSize()
                 Picker("检测间隔", selection: binding(\.interval)) {
@@ -168,7 +172,10 @@ private struct AutoSelectPanel: View {
                 if model.busy { ProgressView().controlSize(.small) }
             }
             .disabled(model.busy)
-            Text(detail(settings)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if settings.enabled {
+                Text(detail(settings)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .help(library.autoSelectCandidates.joined(separator: "\n"))
+            }
         }
         .padding(10).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
@@ -188,14 +195,14 @@ private struct AutoSelectPanel: View {
     private func detail(_ settings: AutoSelectSettings) -> String {
         let candidates = library.autoSelectCandidates
         guard settings.enabled, let first = candidates.first else {
-            return "开启后，内核定期测试当前节点所在订阅中排在最前面的 \(settings.candidateCount) 个节点，始终使用延迟最低且可用的一个；当前节点连续失败时会立即重新检测。排在后面的节点（例如低倍率节点）不参与。"
+            return "暂无可用候选节点"
         }
         let source = library.nodes.first(where: { $0.name == first })?.sourceID
         let group = source.flatMap { id in library.subscriptions.first(where: { $0.id == id })?.name } ?? "本地节点"
         let current = model.status.coreRunning
             ? "当前使用：" + (model.autoSelectedNode ?? "检测中…")
             : "开启代理后生效"
-        return "\(current) · 每 \(intervalLabel(settings.interval))在「\(group)」的 \(candidates.count) 个候选中选延迟最低的：" + candidates.joined(separator: "、")
+        return "\(current) · \(group) · \(candidates.count) 个候选"
     }
 }
 

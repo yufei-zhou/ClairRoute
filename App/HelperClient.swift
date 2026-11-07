@@ -32,7 +32,19 @@ private final class ReplyGate: @unchecked Sendable {
     }
 }
 
-@MainActor final class HelperClient {
+/// Offline lifecycle tests replace every privileged call with a recorder.
+@MainActor protocol HelperControlling: AnyObject {
+    var onDisconnect: (() -> Void)? { get set }
+    func status() async throws -> ServiceStatus
+    func stop() async throws -> ServiceStatus
+    func apply(_ request: ApplyRequest) async throws -> ServiceStatus
+    func heartbeat(sessionID: UUID) async throws -> ServiceStatus
+    func connections() async throws -> [ConnectionSnapshot]
+    func proxies() async throws -> [ProxySnapshot]
+    func delay(node: String) async throws -> Int
+}
+
+@MainActor final class HelperClient: HelperControlling {
     private var connection: NSXPCConnection?
     private var activeSessionID: UUID?
     private var delayInFlight = false

@@ -163,14 +163,14 @@ public struct ProxyNode: Codable, Identifiable, Sendable {
     }
 }
 
-/// Automatic failover: the core keeps PROXY on the lowest-latency node among the
+/// Automatic selection prefers low latency with 50 ms switching tolerance among the
 /// first `candidateCount` nodes of the selected node's subscription (or local nodes).
 public struct AutoSelectSettings: Codable, Sendable, Equatable {
     public static let candidateRange = 2...20
     public static let intervals = [60, 120, 300, 600]
     public var enabled: Bool
     public var candidateCount: Int
-    /// Seconds between latency checks. A failing node also triggers an immediate check.
+    /// Seconds between latency checks; the core may also check after connection failures.
     public var interval: Int
 
     public init(enabled: Bool = false, candidateCount: Int = 5, interval: Int = 120) {

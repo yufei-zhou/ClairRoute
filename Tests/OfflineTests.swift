@@ -24,6 +24,7 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
             try configurationTests()
             try recoveryTests()
             try await runLibraryTests()
+            try await runAppModelTests()
             print("PASS — all offline tests; no core, Helper, Keychain, UI or network execution")
         } catch {
             print("FAIL — " + String(describing: error))
@@ -117,7 +118,8 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
         try check(parsed.rules.count == 1 && parsed.rules[0].policy == ConfigurationBuilder.sourcePolicy(sourceID), "import group normalized and MATCH controlled by user")
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/full-clash.yaml")
         let fullTemplate = try SubscriptionParser.parse(Data(contentsOf: fixture), sourceID: sourceID)
-        try check(fullTemplate.nodes.count == 2 && fullTemplate.warnings.contains(where: { $0.contains("运行选项已忽略") }), "full Clash template safely extracts direct and inline nodes")
+        try check(fullTemplate.nodes.count == 2 && fullTemplate.notes.contains(where: { $0.contains("运行选项已忽略") }), "full Clash template safely extracts direct and inline nodes")
+        try check(parsed.warnings.isEmpty && parsed.notes.count == 2, "expected group and MATCH normalization does not create persistent warnings")
         let regenerated = try ConfigurationBuilder.makeConfiguration(profile: RuntimeProfile(nodes: fullTemplate.nodes, rules: fullTemplate.rules), tunEnabled: false, controllerPath: "/var/run/clairroute/controller.sock")
         let templateOutput = try JSONSerialization.jsonObject(with: regenerated) as! [String: Any]
         try check(templateOutput["allow-lan"] as? Bool == false && templateOutput["mode"] as? String == "rule" && templateOutput["mixed-port"] as? Int == 17890, "subscription runtime options never reach generated configuration")
@@ -311,6 +313,18 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
         output = try groups()
         try check(output[ConfigurationBuilder.autoPolicy] == nil && output["PROXY"]?["default-selected"] as? String == "Local"
             && output["PROXY"]?["proxies"] as? [String] == ["Local"] + pool.map(\.name), "disabled automatic selection generates the previous manual PROXY group")
+        let otherSource = UUID(uuidString: "88888888-2222-3333-4444-555555555555")!
+        profile.nodes.append(ProxyNode(name: "Other subscription", server: "example.test", port: 443,
+                                      cipher: "aes-256-gcm", password: "test-only-password", sourceID: otherSource))
+        profile.selectedNode = "Auto 3"
+        output = try groups()
+        try check(output[ConfigurationBuilder.sourcePolicy(sourceID)]?["default-selected"] as? String == "PROXY"
+            && output[ConfigurationBuilder.sourcePolicy(otherSource)]?["proxies"] == nil, "only the selected subscription follows PROXY")
+        profile.selectedNode = "Other subscription"
+        output = try groups()
+        try check(output[ConfigurationBuilder.sourcePolicy(otherSource)]?["default-selected"] as? String == "PROXY"
+            && output[ConfigurationBuilder.sourcePolicy(sourceID)]?["proxies"] == nil,
+                  "switching subscriptions moves the PROXY link and removes the previous link")
         profile.autoSelect = AutoSelectSettings(enabled: true, interval: 7)
         try rejects("unsupported automatic interval") { try ConfigurationBuilder.validate(profile) }
         profile.autoSelect = AutoSelectSettings(enabled: true, candidateCount: 0)

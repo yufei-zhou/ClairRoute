@@ -22,7 +22,10 @@ import Darwin
         var advanced = AdvancedOptions()
         // Avoid even the core's IPv6 socket capability probe during this preflight.
         advanced.ipv6 = false
-        let profile = RuntimeProfile(nodes: nodes, rules: rules, selectedNode: "Preflight VLESS Reality", advanced: advanced)
+        let automatic = CommandLine.arguments.contains("--auto-select")
+        let profile = RuntimeProfile(nodes: nodes, rules: rules,
+                                     selectedNode: automatic ? subscription.nodes.last?.name : "Preflight VLESS Reality",
+                                     advanced: advanced, autoSelect: AutoSelectSettings(enabled: automatic))
         let config = try ConfigurationBuilder.makeConfiguration(profile: profile, tunEnabled: false, controllerPath: "/var/run/clairroute-preflight.sock")
         FileHandle.standardOutput.write(config)
     }

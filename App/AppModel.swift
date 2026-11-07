@@ -1,10 +1,24 @@
 import AppKit
 import SwiftUI
 import Combine
+import ServiceManagement
+
+protocol AppPreferenceStorage {
+    func string(forKey key: String) -> String?
+    func set(_ value: Any?, forKey key: String)
+}
+extension UserDefaults: AppPreferenceStorage {}
 
 @MainActor final class AppModel: ObservableObject {
-    let library = AppLibraryModel()
-    private let client = HelperClient()
+    let library: AppLibraryModel
+    private let client: any HelperControlling
+    private let preferences: any AppPreferenceStorage
+    private let signingReady: Bool
+    private let startupNetwork: (any StartupNetworkMonitoring)?
+    private let launchChoiceAtStartup: LaunchConnection
+    private var launchHandled = false
+    private var launchCancelled = false
+    private var automaticStart: Task<Void, Never>?
     private let sessionID = UUID()
     private var generation: UInt64 = 0
     private var polling: Task<Void, Never>?
@@ -15,7 +29,10 @@ import Combine
     private var unconfirmed = false
     private var activeTrialMode = false
     @Published var status: ServiceStatus = .idle
-    @Published var mode: OutboundMode = OutboundMode(rawValue: UserDefaults.standard.string(forKey: "ClairRoute.outboundMode") ?? "rule") ?? .rule
+    @Published var mode: OutboundMode = .rule
+    @Published private(set) var loginStatus: SMAppService.Status = .notRegistered
+    @Published private(set) var launchConnection: LaunchConnection
+    @Published private(set) var startupTakeover: StartupTakeover
     @Published var busy = false
     @Published var helperConnected = false
     @Published var error: String?
@@ -31,7 +48,7 @@ import Combine
     @Published private(set) var autoSelectedNode: String?
     private var pollCount = 0
     @Published var selectedPage: AppPage = .overview
-    var signed: Bool { HelperClient.hasSigningIdentity }
+    var signed: Bool { signingReady }
     var phaseLabel: String {
         guard signed else { return "界面模式" }
         guard helperConnected else { return "状态未确认" }
@@ -88,7 +105,22 @@ import Combine
         return library.subscriptions.contains { $0.id == source && $0.enabled }
     }
 
-    init() {
+    convenience init() {
+        self.init(library: AppLibraryModel(), client: HelperClient(), preferences: UserDefaults.standard,
+                  signed: HelperClient.hasSigningIdentity, startupNetwork: StartupNetworkMonitor())
+        refreshLoginStatus()
+    }
+    init(library: AppLibraryModel, client: any HelperControlling,
+         preferences: any AppPreferenceStorage, signed: Bool,
+         startupNetwork: (any StartupNetworkMonitoring)? = nil) {
+        self.library = library; self.client = client; self.preferences = preferences; signingReady = signed
+        self.startupNetwork = startupNetwork
+        let choice = LaunchConnection(rawValue: preferences.string(forKey: LaunchConnection.preferenceKey) ?? "") ?? .manual
+        launchConnection = choice; launchChoiceAtStartup = choice
+        startupTakeover = StartupTakeover(rawValue: preferences.string(forKey: StartupTakeover.preferenceKey) ?? "") ?? .tun
+        mode = OutboundMode(rawValue: preferences.string(forKey: "ClairRoute.outboundMode") ?? "rule") ?? .rule
+        // Do not resurrect a historical opt-in when upgrading from manual-only builds.
+        preferences.set(false, forKey: "ClairRoute.autoConnect")
         libraryObservation = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         // Successful import, editor and refresh results share the transient channel.
         libraryNoticeObservation = library.$notice.sink { [weak self] message in
@@ -143,6 +175,92 @@ import Combine
             }
         }
     }
+    func stopObserving() { polling?.cancel(); polling = nil }
+    func setLaunchConnection(_ value: LaunchConnection) {
+        preferences.set(value.rawValue, forKey: LaunchConnection.preferenceKey)
+        launchConnection = value
+        if value == .manual { cancelLaunchConnection() }
+        // Selecting automatic only saves the next-launch preference.
+    }
+    private func cancelLaunchConnection() {
+        launchCancelled = true
+        automaticStart?.cancel()
+        startupNetwork?.stop()
+    }
+    /// Called once by the application delegate, never by window or network callbacks.
+    @discardableResult
+    func startLaunchConnection(timeout: Duration = .seconds(60), retryDelay: Duration = .seconds(2)) -> Task<Void, Never>? {
+        guard !launchHandled else { return nil }
+        launchHandled = true
+        guard signed, launchChoiceAtStartup == .automatic, launchConnection == .automatic,
+              !launchCancelled, let startupNetwork else { return nil }
+        startupNetwork.start()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { startupNetwork.stop(); self.automaticStart = nil }
+            let deadline = ContinuousClock.now + timeout
+            while !Task.isCancelled, !self.launchCancelled, self.launchConnection == .automatic,
+                  ContinuousClock.now < deadline {
+                if await self.attemptLaunchConnection(deadline: deadline) { return }
+                if ContinuousClock.now >= deadline { break }
+                do { try await Task.sleep(for: retryDelay) } catch { return }
+            }
+            if !Task.isCancelled, !self.launchCancelled, self.launchConnection == .automatic {
+                self.error = "自动连接未开始：网络或后台服务尚未就绪。请稍后手动连接。"
+            }
+        }
+        automaticStart = task
+        return task
+    }
+    /// A failed Apply ends the launch attempt; only readiness checks may be retried.
+    private func attemptLaunchConnection(deadline: ContinuousClock.Instant) async -> Bool {
+        guard !busy else { return false }
+        guard !library.migrationRequired else {
+            error = "自动连接未开始：请先完成旧配置迁移。"; return true
+        }
+        guard startupNetwork?.isAvailable == true else { return false }
+        busy = true; defer { busy = false }
+        do {
+            let next = try await client.status()
+            guard !Task.isCancelled, !launchCancelled, launchConnection == .automatic else { return true }
+            accept(next)
+            if next.coreRunning { return true }
+            guard next.phase == .idle, !next.recoveryPending, !next.tunEnabled, !next.systemProxyEnabled else { return false }
+            guard ContinuousClock.now < deadline, startupNetwork?.isAvailable == true else { return false }
+            let takeover = startupTakeover
+            _ = await applyWhileBusy(tun: takeover.tunEnabled, proxy: takeover.systemProxyEnabled, trialMode: false)
+            return true
+        } catch {
+            guard !Task.isCancelled, !launchCancelled else { return true }
+            helperConnected = false
+            return false
+        }
+    }
+    var launchAtLogin: Bool { loginStatus == .enabled || loginStatus == .requiresApproval }
+    func refreshLoginStatus() { loginStatus = SMAppService.mainApp.status }
+    func setLaunchAtLogin(_ enabled: Bool) async {
+        do { try await configureLoginItem(enabled); error = nil }
+        catch { self.error = "登录启动设置失败：\(error.localizedDescription)" }
+        refreshLoginStatus()
+    }
+    private func configureLoginItem(_ enabled: Bool) async throws {
+        guard signed, Bundle.main.bundleURL.path == "/Applications/ClairRoute.app" else {
+            throw ClientError.rejected("请从 Applications 中打开已安装的 ClairRoute 后设置登录启动。")
+        }
+        let service = SMAppService.mainApp
+        if enabled {
+            if service.status != .enabled && service.status != .requiresApproval { try service.register() }
+        } else if service.status != .notRegistered && service.status != .notFound {
+            try await service.unregister()
+        }
+        refreshLoginStatus()
+    }
+    func openLoginSettings() { SMAppService.openSystemSettingsLoginItems() }
+    func removeStartupSettings() async throws {
+        try await configureLoginItem(false)
+        setLaunchConnection(.manual)
+    }
+
     private func accept(_ next: ServiceStatus) {
         status = next; generation = max(generation, next.generation)
         helperConnected = true; unconfirmed = false
@@ -160,13 +278,21 @@ import Combine
         do { accept(try await client.status()); error = nil }
         catch { self.error = error.localizedDescription; helperConnected = false }
     }
-    func setTUN(_ value: Bool) async { _ = await apply(tun: value, proxy: status.systemProxyEnabled) }
-    func setSystemProxy(_ value: Bool) async { _ = await apply(tun: status.tunEnabled, proxy: value) }
+    func setTUN(_ value: Bool) async {
+        cancelLaunchConnection()
+        _ = await apply(tun: value, proxy: status.systemProxyEnabled)
+    }
+    func setSystemProxy(_ value: Bool) async {
+        cancelLaunchConnection()
+        _ = await apply(tun: status.tunEnabled, proxy: value)
+    }
     func startLimitedTrial() async {
+        cancelLaunchConnection()
         guard !status.coreRunning else { error = "请先停止当前会话，再开始限时验收。"; return }
         _ = await apply(tun: true, proxy: false, trialMode: true)
     }
     func startLimitedSystemProxyTrial() async {
+        cancelLaunchConnection()
         guard !status.coreRunning else { error = "请先停止当前会话，再开始限时验收。"; return }
         _ = await apply(tun: false, proxy: true, trialMode: true)
     }
@@ -181,6 +307,10 @@ import Combine
     private func apply(tun: Bool, proxy: Bool, newMode: OutboundMode? = nil, trialMode: Bool? = nil) async -> Bool {
         guard !busy else { return false }
         busy = true; defer { busy = false }
+        return await applyWhileBusy(tun: tun, proxy: proxy, newMode: newMode, trialMode: trialMode)
+    }
+    /// Caller owns the busy flag throughout persistence, apply and rollback.
+    private func applyWhileBusy(tun: Bool, proxy: Bool, newMode: OutboundMode? = nil, trialMode: Bool? = nil) async -> Bool {
         let requestedTrial = trialMode ?? activeTrialMode
         do {
             if !tun && !proxy { accept(try await client.stop()) }
@@ -192,6 +322,11 @@ import Combine
                 accept(try await client.apply(ApplyRequest(sessionID: sessionID, generation: generation,
                     tunEnabled: tun, systemProxyEnabled: proxy, profile: profile, trialMode: requestedTrial)))
                 activeTrialMode = requestedTrial && status.coreRunning
+                if !requestedTrial, status.phase == .active, status.coreRunning, !status.recoveryPending,
+                   let takeover = StartupTakeover(tun: status.tunEnabled, systemProxy: status.systemProxyEnabled) {
+                    preferences.set(takeover.rawValue, forKey: StartupTakeover.preferenceKey)
+                    startupTakeover = takeover
+                }
             }
             error = nil; notice = "配置已应用。"; return true
         } catch {
@@ -207,56 +342,57 @@ import Combine
         if status.coreRunning {
             guard await apply(tun: status.tunEnabled, proxy: status.systemProxyEnabled, newMode: value) else { return }
         }
-        mode = value; UserDefaults.standard.set(value.rawValue, forKey: "ClairRoute.outboundMode")
+        mode = value; preferences.set(value.rawValue, forKey: "ClairRoute.outboundMode")
     }
     func chooseNode(_ name: String) async {
         guard !busy else { return }
         busy = true; defer { busy = false }
-        let previous = library.selectedNode ?? library.nodes.first?.name
-        // The automatic group cannot be a manual target; on a failed save the core keeps the new node.
+        let previous = library.selectedNode
         let wasAutomatic = library.autoSelect.enabled
-        do {
-            if status.coreRunning { accept(try await client.select(node: name)) }
-            do { try library.selectNode(name) }
-            catch {
-                if status.coreRunning, !wasAutomatic, let previous {
-                    do { accept(try await client.select(node: previous)) }
-                    catch {
-                        do { accept(try await client.stop()) }
-                        catch { unconfirmed = true; helperConnected = false }
-                        throw ClientError.rejected("节点保存和恢复选择均未能确认，已请求停止代理。请检查网络恢复状态。")
-                    }
-                }
-                throw error
-            }
-            autoSelectedNode = nil
-            error = nil; notice = wasAutomatic ? "已改为手动选择节点：\(name)" : "已选择节点：\(name)"
-        } catch {
-            self.error = error.localizedDescription
-            if let actual = (error as? ClientError)?.reportedStatus { accept(actual) }
-            else if status.coreRunning {
-                if let actual = try? await client.status() { accept(actual) }
-                else { unconfirmed = true; helperConnected = false }
-            }
+        let previousAuto = library.autoSelect
+        // A disk error must leave the live session intact.
+        do { try library.selectNode(name) }
+        catch { self.error = error.localizedDescription; return }
+        autoSelectedNode = nil
+        // Rebuild dependent subscription groups and remove the old automatic probe group.
+        if status.coreRunning, !(await applyWhileBusy(tun: status.tunEnabled, proxy: status.systemProxyEnabled)) {
+            await restoreSavedSelection(node: previous, autoSelect: previousAuto)
+            return
         }
+        error = nil; notice = wasAutomatic ? "已改为手动选择节点：\(name)" : "已选择节点：\(name)"
     }
     /// Saves automatic selection and, while proxying, reloads the core so it takes effect now.
     func setAutoSelect(_ settings: AutoSelectSettings) async {
         guard !busy else { return }
+        busy = true; defer { busy = false }
         let previous = library.autoSelect
+        let previousNode = library.selectedNode
         do { try library.setAutoSelect(settings) }
         catch { self.error = error.localizedDescription; return }
         autoSelectedNode = nil
         guard status.coreRunning else {
+            error = nil
             notice = settings.enabled ? "已开启自动选择；开启代理时生效。" : "已关闭自动选择。"
             return
         }
-        if await apply(tun: status.tunEnabled, proxy: status.systemProxyEnabled) {
+        if await applyWhileBusy(tun: status.tunEnabled, proxy: status.systemProxyEnabled) {
             notice = settings.enabled ? "已开启自动选择，内核会每 \(settings.interval) 秒检测一次延迟。" : "已关闭自动选择，改用手动选择的节点。"
             if settings.enabled { await refreshAutoSelection() }
         } else {
-            // Keep the saved setting in line with what the running core actually uses.
-            try? library.setAutoSelect(previous)
+            await restoreSavedSelection(node: previousNode, autoSelect: previous)
+        }
+    }
+    private func restoreSavedSelection(node: String?, autoSelect: AutoSelectSettings) async {
+        do { try library.restoreSelection(node: node, autoSelect: autoSelect) }
+        catch {
+            var restored = false
+            do {
+                accept(try await client.stop())
+                restored = !status.coreRunning && !status.recoveryPending && !status.tunEnabled && !status.systemProxyEnabled
+            } catch { unconfirmed = true; helperConnected = false }
+            self.error = restored
+                ? "配置应用失败，原节点设置也未能写回。代理已关闭，请检查保存的设置后再连接。"
+                : "配置应用失败，原节点设置也未能写回，网络恢复状态未确认。请重试「恢复网络并关闭代理」。"
         }
     }
     func measureDelay(_ name: String) async {
@@ -281,6 +417,7 @@ import Combine
         }
     }
     func stopAndRestore() async -> Bool {
+        cancelLaunchConnection()
         guard !busy else { error = "操作正在进行，请稍后再退出。"; return false }
         guard signed else { return true }
         busy = true; defer { busy = false }
@@ -311,7 +448,11 @@ import Combine
     func refreshSubscription(_ id: UUID) async {
         dismissError()
         do { try await library.refreshSubscription(id: id) }
-        catch { self.error = error.localizedDescription }
+        catch {
+            // The library owns refresh errors and clears them after a successful retry,
+            // including automatic retries. Do not retain a stale duplicate in AppModel.
+            if library.error == nil { self.error = error.localizedDescription }
+        }
     }
     func dismissError() { error = nil; notice = ""; library.clearMessages() }
     func dismissNotice() { notice = "" }
@@ -323,8 +464,16 @@ import Combine
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
-    weak var model: AppModel?
+    let model = AppModel()
     var openMainWindow: (() -> Void)?
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        model.startObserving()
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let loginLaunch = event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == keyAELaunchedAsLogInItem
+        if loginLaunch || ProcessInfo.processInfo.arguments.contains("--background") { NSApp.hide(nil) }
+        model.startLaunchConnection()
+    }
+    func applicationDidBecomeActive(_ notification: Notification) { model.refreshLoginStatus() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Closing the interface must not end the active proxy session or heartbeat.
         false
@@ -337,7 +486,6 @@ import Combine
         return false
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model else { return .terminateNow }
         Task {
             let restored = await model.stopAndRestore()
             if !restored {

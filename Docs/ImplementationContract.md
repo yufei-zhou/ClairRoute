@@ -1,6 +1,10 @@
 # ClairRoute implementation contract
 
-Current scope: milestones 1–4, macOS 26+, Apple Silicon, Swift 6 / SwiftUI. This describes the delivered source and its boundaries, not completed network acceptance. Default rules are ChatGPT-only (`^/Applications/ChatGPT\.app/` → `PROXY`, final `MATCH,DIRECT`). Both network switches start off.
+Current scope: milestones 1–4, macOS 26+, Apple Silicon, Swift 6 / SwiftUI. This describes the delivered source and its boundaries, not completed network acceptance. Default rules are ChatGPT-only (`^/Applications/ChatGPT\.app/` → `PROXY`, final `MATCH,DIRECT`). Fresh installations default to manual connection with both network switches off.
+
+The overview offers manual or automatic connection on launch, independently of the optional `SMAppService.mainApp` login item. The new `ClairRoute.launchConnection` string defaults to manual; the historical `ClairRoute.autoConnect` flag is still retired and cleared, so upgrading does not silently opt in. Changing the choice does not connect or stop the current session. A delegate-only, single launch task captures the startup choice, waits up to roughly 60 seconds for a usable system network path and a freshly authenticated, idle Helper with no recovery or takeover flags, then attempts Apply once. Failures are shown without automatic Apply retries; manual Stop, takeover controls, or choosing manual cancels a pending launch. Window-reopen, subscription-refresh and network callbacks do not schedule new sessions. Closing a window preserves an already-active session; Cmd+Q restores networking and exits. The delegate owns the model independently of the window.
+
+Only a confirmed successful, ordinary active session saves `ClairRoute.lastSuccessfulTakeover` as TUN, system proxy or both. Stops, trials and failed requests preserve it. First opt-in without a saved combination defaults to TUN only. The normal configuration/rollback path handles automatic launch too; existing sessions are never replaced by startup.
 
 ## Development and acceptance boundary
 
@@ -32,6 +36,8 @@ Objective-C methods are `apply`, `stop`, `readStatus`, `heartbeat`, and `inspect
 
 The builder emits deterministic JSON (valid YAML) in memory. Full credentials travel through bounded XPC, pipes for core config checking/startup, and private controller reload bodies. No credential-bearing config file, argv, provider cache or persistent core selection cache is written. Before activation/reload, Helper validates the model and runs the fixed core's `-t` check; health and selected node are confirmed before accepting the transaction. Failure attempts the prior configuration/state; unconfirmed rollback stops proxying and restores owned settings.
 
+GUI manual node selection durably saves the node and disabled automatic setting together before touching the running core. Both manual and automatic selection changes use full transactional Apply while running, so subscription-group links are regenerated and a retired automatic probe group is removed. Apply failure restores both saved fields in one write. If that write also fails, the GUI requests Stop and reports whether recovery was confirmed. The busy state spans persistence, Apply and rollback. While stopped, selection changes only save the profile.
+
 Template defaults include `find-process-mode: strict`, mixed TUN stack, auto-route, auto-detect-interface, UDP/TCP port-53 hijack and fake-IP DNS. The highlighted advanced editor accepts only `ipv6`, `log-level`, `tcp-concurrent`, `tun.stack`, `tun.mtu`, DNS upstreams and fake-IP filter. It is a safe YAML fragment editor, not an unrestricted privileged configuration editor. DNS URLs cannot embed credentials, query tokens or local paths.
 
 User rules precede subscription rules, retaining order within each part; the first match wins and final MATCH is separately managed. Kinds are PROCESS-PATH-REGEX, PROCESS-NAME, DOMAIN, DOMAIN-SUFFIX, DOMAIN-KEYWORD and GEOSITE. Process path patterns accept escaped literal absolute prefixes/exact paths, not general regex. Bundle prefixes include helpers inside the bundle; separately installed/shared helpers need separate rules. Actual process attribution depends on macOS/core and requires connection-panel acceptance.
@@ -48,13 +54,15 @@ Disabling a subscription preserves saved user policies, fallback and selected no
 
 Success notices expire after eight seconds; each occurrence has a new identity, and cancelled timers never clear messages. Import/refresh warnings use a separate channel and remain until manually dismissed, including across later operations. Repeated pending warnings are deduplicated; the same warning can appear again after dismissal.
 
+Routine full-template normalization (local listener/DNS/TUN settings, regenerated groups, and the locally owned MATCH fallback) is recorded as parser notes rather than warning banners. Unsupported rules or URI schemes still produce persistent warnings. A subscription refresh error belongs to the library, so a later successful automatic retry clears it instead of leaving a duplicated GUI error behind.
+
 Clash/Mihomo YAML, Base64 URI lists and ss/vmess/vless URIs are parsed locally without online converters. Typed nodes generate **inline proxy-providers**, so secret subscription URLs never reach root files. Provider/group names are generated locally, with stable internal node IDs separate from display names. Safe full-template fields may be ignored; executable providers, foreign paths, unsafe directives, YAML tags/aliases and unsupported transports are rejected instead of copied. Remote rule-provider fetching is unsupported; GEOSITE uses the bundled hash-checked asset.
 
 The connection panel shows process/path, destination, matching rule and outbound chains, and drafts rules from rows. Polling uses bounded snapshots. Delay tests and actual connection observations are live network operations requiring an authenticated active session.
 
 ## Restore-first lifecycle
 
-States are idle → preparing → starting → active, with reconfiguring, restoring and needsAttention branches. Installation/login never auto-enable networking. Library editing does not activate the network.
+States are idle → preparing → starting → active, with reconfiguring, restoring and needsAttention branches. Installation never enables networking; application launch only does so after an explicit automatic-connection opt-in. Library editing does not activate the network.
 
 `NetworkSettingsManager` serial API: `init(stateDirectory:)`, `recoverIfNeeded()`, `prepare(sessionID:)`, `apply(tunEnabled:systemProxyEnabled:)`, `restoreAll()`, `recoveryPending`, `conflictDescription()`, `startObserving(onChange:)`, `stopObserving()`. It uses native SystemConfiguration and physical-service UUIDs, with independent DNS/proxy leases. Journal precedes settings commit. Related enable/endpoint fields are compared/restored together; externally changed values are preserved and reported rather than overwritten by a full historical snapshot.
 

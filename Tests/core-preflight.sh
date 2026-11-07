@@ -20,4 +20,8 @@ xcrun swiftc -swift-version 6 -module-cache-path "$TASK_BUILD/module-cache" \
   "$TASK_ROOT"/Shared/*.swift "$TASK_ROOT/Tests/CorePreflight.swift" -o "$TASK_BUILD/generate-fixture"
 # The subprocess runs unprivileged. Drop all CLASH_* and proxy environment overrides.
 # stdin contains fake credentials only; config files and provider caches are not written.
-"$TASK_BUILD/generate-fixture" | /usr/bin/env -i "$TASK_ROOT/Vendor/mihomo" -t -f - -d "$TASK_BUILD/runtime"
+# Deny all network operations even if a future parser starts a health-check task.
+for mode in --manual --auto-select; do
+  "$TASK_BUILD/generate-fixture" "$mode" | /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny network*)' \
+    /usr/bin/env -i "$TASK_ROOT/Vendor/mihomo" -t -f - -d "$TASK_BUILD/runtime"
+done

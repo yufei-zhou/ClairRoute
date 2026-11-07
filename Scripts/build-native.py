@@ -83,7 +83,7 @@ print('Compiling SwiftUI App (not launching it)…', flush=True)
 subprocess.run(common + ['-module-name', 'ClairRoute'] + shared +
                [str(p) for p in sorted((root/'App').glob('*.swift'))] +
                ['-o', str(macos/'ClairRoute')], check=True)
-for name in ('mihomo', 'CoreManifest.json', 'mihomo-LICENSE', 'THIRD-PARTY-NOTICES.txt', 'geosite.dat', 'GeoManifest.json'):
+for name in ('mihomo', 'CoreManifest.json', 'mihomo-LICENSE', 'THIRD-PARTY-NOTICES.txt', 'geosite.dat', 'GeoManifest.json', 'AppIcon.icns'):
     shutil.copy2(root/'Resources'/name, resources/name)
 shutil.copy2(root/'Resources/local.nano.ClairRoute.Helper.plist', daemons)
 shutil.copy2(root/'Resources/local.nano.ClairRoute.RecoveryGuard.plist', daemons)

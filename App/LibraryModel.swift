@@ -193,7 +193,7 @@ final class AppLibraryModel: ObservableObject {
             Self.repoint(&next, from: Set(previous.map(\.name)).subtracting(next.nodes.map(\.name)), to: ConfigurationBuilder.sourcePolicy(id))
             try validate(next, overrides: overrides)
             try commit(next, additions: additions, removing: removed)
-            notice = "订阅已更新：\(parsed.nodes.count) 个节点。点击「应用配置」后用于当前会话。"
+            notice = "订阅已更新：\(parsed.nodes.count) 个节点。"
             warnings = parsed.warnings.map { next.subscriptions[currentIndex].name + "：" + $0 }
         } catch {
             self.error = safeError(error)
@@ -247,6 +247,11 @@ final class AppLibraryModel: ObservableObject {
     /// A manual choice also turns automatic selection off.
     func selectNode(_ name: String?) throws {
         var next = store.snapshot; next.selectedNode = name; next.autoSelect.enabled = false
+        try validate(next); try commit(next)
+    }
+    /// Restore both settings in one durable write after a failed live update.
+    func restoreSelection(node: String?, autoSelect: AutoSelectSettings) throws {
+        var next = store.snapshot; next.selectedNode = node; next.autoSelect = autoSelect
         try validate(next); try commit(next)
     }
     func setAutoSelect(_ settings: AutoSelectSettings) throws {

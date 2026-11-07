@@ -6,31 +6,39 @@ struct MainView: View {
     @ObservedObject var library: AppLibraryModel
 
     var body: some View {
-        NavigationSplitView {
-            List(AppPage.allCases, selection: Binding<AppPage?>(get: { model.selectedPage }, set: { if let page = $0 { model.selectedPage = page } })) { page in
-                Label(page.title, systemImage: page.symbol)
-                    .tag(page)
-                    .accessibilityIdentifier("page-" + page.title)
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
-            .safeAreaInset(edge: .bottom) { StatusBadge(model: model).padding(12) }
-        } detail: {
+        HSplitView {
             VStack(spacing: 0) {
+                List(AppPage.allCases, selection: Binding<AppPage?>(get: { model.selectedPage }, set: { if let page = $0 { model.selectedPage = page } })) { page in
+                    Label(page.title, systemImage: page.symbol)
+                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .tag(page)
+                        .accessibilityIdentifier("page-" + page.title)
+                }.listStyle(.sidebar).scrollContentBackground(.hidden).padding(.top, 8)
+                StatusBadge(model: model).padding(12)
+            }
+            .frame(minWidth: 180, idealWidth: 200, maxWidth: 240)
+            .frame(maxHeight: .infinity)
+            .background(.bar)
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text(model.selectedPage.title).font(.title2.weight(.semibold))
+                    Spacer()
+                    if model.busy { ProgressView().controlSize(.small) }
+                    Button("应用配置", systemImage: "checkmark.circle") { Task { await model.applySavedConfiguration() } }
+                        .buttonStyle(.borderedProminent)
+                        .help("校验已保存的节点、规则和高级选项；代理运行中时立即生效。")
+                        .disabled(model.busy || library.migrationRequired)
+                }.padding(.horizontal, 22).padding(.vertical, 16)
+                Divider()
                 if library.migrationRequired { migrationBanner }
                 page.frame(maxWidth: .infinity, maxHeight: .infinity)
                 MessageBar(model: model, library: library)
             }
-            .navigationTitle(model.selectedPage.title)
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    if model.busy { ProgressView().controlSize(.small) }
-                    Button("应用配置", systemImage: "checkmark.circle") { Task { await model.applySavedConfiguration() } }
-                        .help("校验已保存的节点、规则和高级选项；代理运行中时立即生效。")
-                        .disabled(model.busy || library.migrationRequired)
-                }
-            }
+            .frame(minWidth: 720, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 960, minHeight: 640)
+        .background(WindowContentBoundary().frame(width: 0, height: 0))
     }
 
     @ViewBuilder private var page: some View {
@@ -102,7 +110,6 @@ private struct MessageBar: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(height: min(CGFloat(model.pendingWarnings.count) * 48, 160))
-                    Spacer()
                     copyButton(model.pendingWarnings.joined(separator: "\n"))
                     Button("关闭警告") { model.dismissWarnings() }.buttonStyle(.borderless)
                 }
@@ -127,6 +134,7 @@ private struct MessageBar: View {
                 }
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func copyButton(_ text: String) -> some View {
