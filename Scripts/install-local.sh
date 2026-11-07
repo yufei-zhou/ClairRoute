@@ -6,8 +6,9 @@ umask 077
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IDENTITY="${1:-}"
 [[ $(id -u) == 0 ]] || { echo 'Run with sudo after reviewing README.' >&2; exit 1; }
-[[ "$IDENTITY" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'Usage: sudo Scripts/install-local.sh <identity SHA1>' >&2; exit 1; }
-SOURCE="$ROOT/.build/Local/Build/Products/Release/ClairRoute.app"
+[[ "$IDENTITY" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'Usage: sudo Scripts/install-local.sh <identity SHA1> [signed ClairRoute.app]' >&2; exit 1; }
+# The one-line installer passes a downloaded release; a source checkout installs its own build.
+SOURCE="${2:-$ROOT/.build/Local/Build/Products/Release/ClairRoute.app}"
 TARGET='/Applications/ClairRoute.app'
 SUPPORT='/Library/Application Support/ClairRoute'
 DAEMON='/Library/LaunchDaemons/local.nano.ClairRoute.Helper.plist'

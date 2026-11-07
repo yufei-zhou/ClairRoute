@@ -15,7 +15,9 @@ if sum(item.upper()==sys.argv[1].upper() for item in hashes)!=1:
     raise SystemExit('The specified valid signing identity and private key were not found uniquely in your login Keychain.')
 PY
 [[ -f "$ROOT/Vendor/mihomo" ]] || "$ROOT/Scripts/fetch-core.sh"
-/usr/bin/python3 "$ROOT/Scripts/build-native.py" --identity "$IDENTITY"
+shift
+# Extra arguments (e.g. --version X.Y.Z from Scripts/release.sh) go to the native build.
+/usr/bin/python3 "$ROOT/Scripts/build-native.py" --identity "$IDENTITY" "$@"
 APP="$ROOT/.build/Local/Build/Products/Release/ClairRoute.app"
 codesign --verify --deep --strict "$APP"
 echo "Built signed application: $APP"
