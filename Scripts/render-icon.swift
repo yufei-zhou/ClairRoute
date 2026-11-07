@@ -1,54 +1,75 @@
 import AppKit
 import CoreGraphics
 
-// Vector master matches Resources/AppIcon.svg. Rasterize each native size directly,
-// rather than repeatedly downscaling a bitmap. No GUI or network is used.
+// Usage: swift Scripts/render-icon.swift <project root>
+// Draws the app icon (an open white ring and the node past its gap, on a blue gradient)
+// at every native size, then packs Resources/AppIcon.icns. No GUI or network is used.
 let root = URL(fileURLWithPath: CommandLine.arguments[1])
 let iconset = root.appendingPathComponent(".build/icon/AppIcon.iconset")
+try? FileManager.default.removeItem(at: iconset)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 
-func rgb(_ hex: UInt32, alpha: CGFloat = 1) -> CGColor {
-    CGColor(red: CGFloat((hex >> 16) & 255) / 255,
-            green: CGFloat((hex >> 8) & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: alpha)
+let space = CGColorSpace(name: CGColorSpace.displayP3)!
+func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> CGColor {
+    CGColor(colorSpace: space, components: [CGFloat((hex >> 16) & 255) / 255, CGFloat((hex >> 8) & 255) / 255,
+                                            CGFloat(hex & 255) / 255, alpha])!
 }
-func render(_ pixels: Int) throws -> Data {
-    let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-    let context = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8,
-                            bytesPerRow: pixels * 4, space: colorSpace,
+/// macOS icon grid: an 824 pt body centred in 1024 with continuous (superellipse) corners.
+func squircle() -> CGPath {
+    let path = CGMutablePath()
+    for step in 0...720 {
+        let t = Double(step) / 720 * 2 * .pi
+        let x = 512 + 412 * copysign(pow(abs(cos(t)), 0.4), cos(t))
+        let y = 512 + 412 * copysign(pow(abs(sin(t)), 0.4), sin(t))
+        step == 0 ? path.move(to: CGPoint(x: x, y: y)) : path.addLine(to: CGPoint(x: x, y: y))
+    }
+    path.closeSubpath(); return path
+}
+/// White glyph with a soft drop shadow and a faint vertical tint.
+func fillGlyph(_ context: CGContext, _ shape: CGPath) {
+    context.saveGState()
+    context.setShadow(offset: CGSize(width: 0, height: 14), blur: 30, color: color(0x0A2A66, 0.28))
+    context.addPath(shape); context.setFillColor(color(0xFFFFFF)); context.fillPath()
+    context.restoreGState()
+    context.saveGState(); context.addPath(shape); context.clip()
+    let tint = CGGradient(colorsSpace: space, colors: [color(0xFFFFFF), color(0xDCE9FF)] as CFArray, locations: [0.35, 1])!
+    let box = shape.boundingBox
+    context.drawLinearGradient(tint, start: CGPoint(x: box.midX, y: box.minY), end: CGPoint(x: box.midX, y: box.maxY), options: [])
+    context.restoreGState()
+}
+func render(_ pixels: Int) -> Data {
+    let context = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0, space: space,
                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     context.scaleBy(x: CGFloat(pixels) / 1024, y: CGFloat(pixels) / 1024)
-    context.translateBy(x: 0, y: 1024); context.scaleBy(x: 1, y: -1)
-    let tile = CGPath(roundedRect: CGRect(x: 64, y: 64, width: 896, height: 896),
-                      cornerWidth: 208, cornerHeight: 208, transform: nil)
+    context.translateBy(x: 0, y: 1024); context.scaleBy(x: 1, y: -1) // y grows downwards
+    let tile = squircle()
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: 8), blur: 16, color: rgb(0x08182B, alpha: 0.22))
-    context.addPath(tile); context.setFillColor(rgb(0x142A43)); context.fillPath()
+    context.setShadow(offset: CGSize(width: 0, height: 10), blur: 24, color: color(0x000000, 0.28))
+    context.addPath(tile); context.setFillColor(color(0x1F6BEB)); context.fillPath()
     context.restoreGState()
-    context.saveGState()
-    context.addPath(tile); context.clip()
-    let gradient = CGGradient(colorsSpace: colorSpace, colors: [rgb(0x245E84), rgb(0x142A43)] as CFArray,
-                              locations: [0, 1])!
-    context.drawLinearGradient(gradient, start: CGPoint(x: 160, y: 64), end: CGPoint(x: 864, y: 960), options: [])
+    context.saveGState(); context.addPath(tile); context.clip()
+    let background = CGGradient(colorsSpace: space, colors: [color(0x5CB8FF), color(0x1F6BEB)] as CFArray, locations: [0, 1])!
+    context.drawLinearGradient(background, start: CGPoint(x: 512, y: 100), end: CGPoint(x: 512, y: 924), options: [])
+    let sheen = CGGradient(colorsSpace: space, colors: [color(0xFFFFFF, 0.16), color(0xFFFFFF, 0)] as CFArray, locations: [0, 1])!
+    context.drawRadialGradient(sheen, startCenter: CGPoint(x: 512, y: 120), startRadius: 0,
+                               endCenter: CGPoint(x: 512, y: 120), endRadius: 620, options: [])
+    let ring = CGMutablePath()
+    ring.addArc(center: CGPoint(x: 490, y: 540), radius: 210, startAngle: -.pi * 0.28, endAngle: .pi * 0.28, clockwise: true)
+    fillGlyph(context, ring.copy(strokingWithWidth: 110, lineCap: .round, lineJoin: .round, miterLimit: 10))
+    fillGlyph(context, CGPath(ellipseIn: CGRect(x: 676, y: 262, width: 120, height: 120), transform: nil))
     context.restoreGState()
-    context.addPath(CGPath(roundedRect: CGRect(x: 65, y: 65, width: 894, height: 894),
-                           cornerWidth: 207, cornerHeight: 207, transform: nil))
-    context.setStrokeColor(rgb(0xFFFFFF, alpha: 0.18)); context.setLineWidth(2); context.strokePath()
-    let route = CGMutablePath()
-    route.move(to: CGPoint(x: 340, y: 706)); route.addLine(to: CGPoint(x: 340, y: 508))
-    route.addCurve(to: CGPoint(x: 460, y: 388), control1: CGPoint(x: 340, y: 438), control2: CGPoint(x: 390, y: 388))
-    route.addLine(to: CGPoint(x: 574, y: 388))
-    route.addCurve(to: CGPoint(x: 684, y: 278), control1: CGPoint(x: 644, y: 388), control2: CGPoint(x: 684, y: 348))
-    context.addPath(route); context.setStrokeColor(rgb(0xF1F7FA)); context.setLineWidth(84)
-    context.setLineCap(.round); context.setLineJoin(.round); context.strokePath()
-    context.setFillColor(rgb(0x99DFDE)); context.fillEllipse(in: CGRect(x: 639, y: 233, width: 90, height: 90))
-    let image = NSBitmapImageRep(cgImage: context.makeImage()!)
-    return image.representation(using: .png, properties: [:])!
+    context.addPath(tile); context.setStrokeColor(color(0xFFFFFF, 0.14)); context.setLineWidth(3); context.strokePath()
+    return NSBitmapImageRep(cgImage: context.makeImage()!).representation(using: .png, properties: [:])!
 }
 for size in [16, 32, 128, 256, 512] {
     for scale in [1, 2] {
-        let name = "icon_\(size)x\(size)" + (scale == 2 ? "@2x" : "") + ".png"
-        try render(size * scale).write(to: iconset.appendingPathComponent(name))
+        try render(size * scale).write(to: iconset.appendingPathComponent("icon_\(size)x\(size)" + (scale == 2 ? "@2x" : "") + ".png"))
     }
 }
 try render(1024).write(to: root.appendingPathComponent("Resources/AppIcon.png"))
-print(iconset.path)
+let pack = Process()
+pack.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
+pack.arguments = ["-c", "icns", iconset.path, "-o", root.appendingPathComponent("Resources/AppIcon.icns").path]
+try pack.run(); pack.waitUntilExit()
+guard pack.terminationStatus == 0 else { fatalError("iconutil failed") }
+print("Wrote Resources/AppIcon.icns and Resources/AppIcon.png")
