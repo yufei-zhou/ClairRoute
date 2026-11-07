@@ -299,8 +299,7 @@ final class AppLibraryModel: ObservableObject {
         if pendingSecretCleanup > 0 { throw StoreError.missingSecret }
     }
     func removeAllData() throws {
-        var next = LibrarySnapshot()
-        next.rules = [.chatGPT]
+        let next = LibrarySnapshot()
         try commit(next, removing: store.snapshot.activeSecretIDs)
         notice = pendingSecretCleanup == 0 ? "配置已清理，可退出后卸载。" : "配置已清理；旧钥匙串条目可单独清理。"
     }

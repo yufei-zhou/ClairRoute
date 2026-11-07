@@ -18,7 +18,7 @@ import Darwin
         nodes.append(ProxyNode(name: "Preflight VMess WS", server: "example.test", port: 443, type: .vmess, uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", servername: "example.test", clientFingerprint: "chrome", tls: true, network: "ws", wsPath: "/socket", wsHost: "example.test"))
         let publicKey = Data(repeating: 3, count: 32).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         nodes.append(ProxyNode(name: "Preflight VLESS Reality", server: "example.test", port: 443, type: .vless, uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", flow: "xtls-rprx-vision", servername: "example.test", clientFingerprint: "chrome", publicKey: publicKey, shortID: "0123", tls: true))
-        let rules = [RoutingRule.chatGPT, RoutingRule(kind: .geosite, value: "telegram", policy: "PROXY")] + subscription.rules
+        let rules = RoutingRule.defaults + [RoutingRule(kind: .geosite, value: "telegram", policy: "PROXY")] + subscription.rules
         var advanced = AdvancedOptions()
         // Avoid even the core's IPv6 socket capability probe during this preflight.
         advanced.ipv6 = false

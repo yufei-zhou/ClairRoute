@@ -49,6 +49,25 @@ public struct RoutingRule: Codable, Identifiable, Sendable, Equatable {
              kind: .processPathRegex,
              value: "^" + NSRegularExpression.escapedPattern(for: AppConstants.chatGPTBundlePath).replacingOccurrences(of: "\\/", with: "/") + "/")
     }
+    public static var netflix: Self {
+        Self(id: UUID(uuidString: "5E7F11C5-0A1B-4C6D-9E2F-3A4B5C6D7E81")!, kind: .geosite, value: "netflix")
+    }
+    public static var hbo: Self {
+        Self(id: UUID(uuidString: "5E7F11C5-0A1B-4C6D-9E2F-3A4B5C6D7E82")!, kind: .geosite, value: "hbo")
+    }
+    /// User rules of a fresh profile.
+    public static var defaults: [Self] { [.chatGPT, .netflix, .hbo] }
+    /// Bumped whenever `defaults` gains a rule that existing profiles should receive once.
+    public static let defaultsRevision = 1
+    /// Adds default rules introduced after `revision`, skipping ones the user already covers.
+    public static func addingNewDefaults(to rules: [Self], since revision: Int) -> [Self] {
+        guard revision < 1 else { return rules }
+        var result = rules
+        for rule in [Self.netflix, .hbo] where !rules.contains(where: {
+            $0.id == rule.id || ($0.kind == .geosite && $0.value.lowercased() == rule.value)
+        }) { result.append(rule) }
+        return result
+    }
 }
 
 /// Only these options may be edited in advanced YAML. Privileged paths and listeners

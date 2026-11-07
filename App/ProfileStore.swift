@@ -62,7 +62,9 @@ struct LibrarySnapshot: Codable, Sendable {
     var version = 3
     var nodes: [NodeMetadata] = []
     var subscriptions: [SubscriptionMetadata] = []
-    var rules: [RoutingRule] = [.chatGPT]
+    var rules: [RoutingRule] = RoutingRule.defaults
+    /// Which default-rule additions this profile has already received (see RoutingRule.defaultsRevision).
+    var defaultRulesRevision = RoutingRule.defaultsRevision
     var subscriptionRules: [RoutingRule] = []
     var fallbackPolicy = "DIRECT"
     var selectedNode: String?
@@ -81,7 +83,7 @@ struct LibrarySnapshot: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, nodes, subscriptions, rules, subscriptionRules, fallbackPolicy, selectedNode
+        case version, nodes, subscriptions, rules, defaultRulesRevision, subscriptionRules, fallbackPolicy, selectedNode
         case advanced, autoSelect, pendingSecretIDs, nodeSecrets, subscriptionSecrets, legacyProfile
     }
 }
@@ -127,7 +129,12 @@ extension LibrarySnapshot {
         version = try c.decode(Int.self, forKey: .version)
         nodes = try c.decodeIfPresent([NodeMetadata].self, forKey: .nodes) ?? []
         subscriptions = try c.decodeIfPresent([SubscriptionMetadata].self, forKey: .subscriptions) ?? []
-        rules = try c.decodeIfPresent([RoutingRule].self, forKey: .rules) ?? [.chatGPT]
+        // Profiles saved before a default rule existed receive it once; a later deletion sticks.
+        let revision = try c.decodeIfPresent(Int.self, forKey: .defaultRulesRevision) ?? 0
+        if let saved = try c.decodeIfPresent([RoutingRule].self, forKey: .rules) {
+            rules = RoutingRule.addingNewDefaults(to: saved, since: revision)
+        } else { rules = RoutingRule.defaults }
+        defaultRulesRevision = RoutingRule.defaultsRevision
         subscriptionRules = try c.decodeIfPresent([RoutingRule].self, forKey: .subscriptionRules) ?? []
         fallbackPolicy = try c.decodeIfPresent(String.self, forKey: .fallbackPolicy) ?? "DIRECT"
         selectedNode = try c.decodeIfPresent(String.self, forKey: .selectedNode)

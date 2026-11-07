@@ -284,6 +284,18 @@ func b64(_ value: String) -> String { Data(value.utf8).base64EncodedString() }
         try check(defaultProfile.rules == [.chatGPT] && defaultProfile.fallbackPolicy == "DIRECT", "fresh install defaults to ChatGPT only")
         let oldProfile = try JSONDecoder().decode(RuntimeProfile.self, from: Data(#"{"nodes":[],"mode":"rule","chatGPTOnly":true}"#.utf8))
         try check(oldProfile.rules == [.chatGPT], "M1 persisted profile backward decoding")
+        try check(LibrarySnapshot().rules == [.chatGPT, .netflix, .hbo], "fresh library routes ChatGPT, Netflix and HBO through PROXY")
+        let chatGPTJSON = String(data: try JSONEncoder().encode([RoutingRule.chatGPT]), encoding: .utf8)!
+        let upgraded = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(#"{"version":3,"rules":\#(chatGPTJSON)}"#.utf8))
+        try check(upgraded.rules == RoutingRule.defaults && upgraded.defaultRulesRevision == RoutingRule.defaultsRevision,
+                  "an existing profile receives the new default rules once")
+        var trimmed = upgraded; trimmed.rules.removeAll { $0 == .hbo }
+        let reloaded = try JSONDecoder().decode(LibrarySnapshot.self, from: JSONEncoder().encode(trimmed))
+        try check(reloaded.rules == [.chatGPT, .netflix], "a deleted default rule is not added back")
+        let custom = RoutingRule(kind: .geosite, value: "NETFLIX", policy: "DIRECT")
+        let customJSON = String(data: try JSONEncoder().encode([custom]), encoding: .utf8)!
+        let kept = try JSONDecoder().decode(LibrarySnapshot.self, from: Data(#"{"version":3,"rules":\#(customJSON)}"#.utf8))
+        try check(kept.rules == [custom, .hbo], "an existing Netflix rule keeps the user's policy")
         print("Configuration: golden, stable priority, selection, default routing and provider isolation tests passed")
     }
 
