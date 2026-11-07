@@ -7,7 +7,7 @@ ClairRoute 用 Swift 6 和 SwiftUI 编写，界面简洁，默认只让你指定
 没有遥测，没有广告，不推荐机场，也不调用任何在线订阅转换服务。
 
 > [!NOTE]
-> 目前只支持 **Apple Silicon + macOS 26 或更新版本**，需要在本机用 Xcode 构建安装，暂不提供可直接下载的安装包。
+> 目前只支持 **Apple Silicon + macOS 26 或更新版本**。
 
 ## 功能一览
 
@@ -19,15 +19,21 @@ ClairRoute 用 Swift 6 和 SwiftUI 编写，界面简洁，默认只让你指定
 - **安全的高级设置**：可以改 DNS、IPv6、TUN 协议栈和 MTU 等，但无法改动监听端口、控制接口或文件路径。
 - **自动恢复网络**：界面退出或崩溃、心跳超时、睡眠唤醒、网络切换时都会检查并在必要时恢复原有设置。首次使用还可以做 120 秒限时验收，到期自动回滚。
 
-## 安装
+## 安装 / 更新
 
-你需要：
+在终端运行（安装和更新都是这一行）：
 
-- 一台 Apple Silicon Mac，系统为 macOS 26 或更新版本
-- 完整安装的 Xcode（不是只有命令行工具），并在 Xcode 设置 › Locations 里选中它
-- 管理员密码（安装后台服务时需要）
+```bash
+curl -fsSL https://raw.githubusercontent.com/yufei-zhou/ClairRoute/main/install.sh | bash
+```
 
-不需要付费的 Apple 开发者账号。
+它会下载最新的发布版，校验签名，然后请求一次电脑登录密码，把 App 装到 `/Applications` 并注册两个后台服务。已经是最新版时什么也不做；正在运行的旧版会先恢复网络再退出。不需要 Xcode，也不需要 Apple 开发者账号。
+
+安装不会开启代理。首次打开应用默认手动连接；后续启动遵循你在“打开应用后”中保存的选择。
+
+### 从源码安装
+
+需要完整安装的 Xcode（macOS 26 SDK）：
 
 ```bash
 git clone https://github.com/yufei-zhou/ClairRoute.git
@@ -35,14 +41,17 @@ cd ClairRoute
 bash 'Scripts/Install ClairRoute.command'
 ```
 
-也可以在 Finder 里双击 `Scripts/Install ClairRoute.command`。安装器会依次：
+源码安装会在你的登录钥匙串里创建一个仅用于本机代码签名的证书，用它编译并签名 App、Helper 和 RecoveryGuard，然后请求管理员密码完成安装。分步说明见 [从源码构建](#从源码构建)。
 
-1. 下载固定版本的官方 mihomo 内核并校验 SHA256（只下载，不执行）；
-2. 在你的登录钥匙串里创建（或复用）一个仅用于本机代码签名的证书；
-3. 编译并签名 App、Helper 和 RecoveryGuard；
-4. 在终端里请求管理员密码，把 App 装到 `/Applications`，并注册两个空闲的后台服务。
+### 发布新版本（维护者）
 
-安装器不会开启代理。首次打开应用默认手动连接；后续启动遵循你在“打开应用后”中保存的选择。如果想分步执行或了解每一步做了什么，见 [从源码构建](#从源码构建)。
+在持有发布证书的 Mac 上，main 与 origin/main 一致且没有未提交改动时运行：
+
+```bash
+Scripts/release.sh 0.2.0 "更新说明"
+```
+
+它会跑离线测试、用发布证书编译签名、打包、打 tag 并创建 GitHub Release；不会向 main 提交或推送。
 
 ## 快速上手
 
@@ -54,17 +63,19 @@ bash 'Scripts/Install ClairRoute.command'
 
 自动连接使用上次成功的普通会话的 TUN / 系统代理开关组合；尚无记录时使用 TUN。退出、停止、限时验收和失败的连接都不会覆盖该记录。选择“自动连接”不会立即接管网络；下次启动等待网络、已验签的 Helper 和恢复状态就绪，最多等待约一分钟，然后只尝试连接一次。失败后显示错误，等待手动处理。重新打开已有窗口、刷新订阅或切换网络不会启动新的代理会话。
 
-### 默认只有 ChatGPT 走代理
+### 默认走代理的只有 ChatGPT、Netflix 和 HBO
 
-全新安装时只有一条规则：
+全新安装时有三条规则：
 
 ```yaml
 rules:
   - 'PROCESS-PATH-REGEX,^/Applications/ChatGPT\.app/,PROXY'
+  - 'GEOSITE,netflix,PROXY'
+  - 'GEOSITE,hbo,PROXY'
   - 'MATCH,DIRECT'
 ```
 
-也就是说，只有 `/Applications/ChatGPT.app` 里的进程走代理，其他所有流量都直连。想让更多 App 或网站走代理，到“规则”页添加，或者把“其余流量”改成 `PROXY`。
+也就是说，`/Applications/ChatGPT.app` 里的进程和 Netflix、HBO 的域名走代理，其他所有流量都直连。旧版本升级时会补上 Netflix 和 HBO 两条规则一次（已有同名 GEOSITE 规则时不会重复添加）；之后删掉也不会再加回来。想让更多 App 或网站走代理，到“规则”页添加，或者把“其余流量”改成 `PROXY`。
 
 修改节点、规则或高级设置后，点右上角的“应用配置”才会作用到正在运行的会话；订阅自动刷新只会更新节点列表，不会悄悄改变正在运行的代理。
 

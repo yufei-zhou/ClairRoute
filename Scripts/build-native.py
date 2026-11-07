@@ -12,7 +12,10 @@ import subprocess
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--identity', default='', help='Local codesigning identity SHA1; omit for UI-only preview')
+parser.add_argument('--version', default='', help='Release version X.Y.Z written into the app (default: source plist)')
 args = parser.parse_args()
+if args.version and not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
+    parser.error('--version must look like 1.2.3')
 identity = args.identity.upper()
 if identity and not re.fullmatch(r'[0-9A-F]{40}', identity):
     parser.error('--identity must be the exact 40-character certificate SHA1')
@@ -63,6 +66,13 @@ process_plist(root/'Resources/Helper-Info.plist', guard_info,
               'local.nano.ClairRoute.RecoveryGuard', 'ClairRouteRecoveryGuard')
 process_plist(root/'Resources/App-Info.plist', staging/'Contents/Info.plist',
               'local.nano.ClairRoute', 'ClairRoute')
+if args.version:
+    # CFBundleVersion must increase monotonically; derive it from X.Y.Z.
+    major, minor, patch = map(int, args.version.split('.'))
+    with (staging/'Contents/Info.plist').open('rb') as stream: info = plistlib.load(stream)
+    info['CFBundleShortVersionString'] = args.version
+    info['CFBundleVersion'] = str(major * 10_000 + minor * 100 + patch)
+    with (staging/'Contents/Info.plist').open('wb') as stream: plistlib.dump(info, stream)
 common = [str(compiler), '-parse-as-library', '-swift-version', '6', '-Osize',
           '-target', 'arm64-apple-macosx26.0', '-sdk', str(sdk),
           '-module-cache-path', str(build/'ModuleCache')]
@@ -89,7 +99,7 @@ shutil.copy2(root/'Resources/local.nano.ClairRoute.Helper.plist', daemons)
 shutil.copy2(root/'Resources/local.nano.ClairRoute.RecoveryGuard.plist', daemons)
 shutil.copy2(root/'README.md', resources/'README.md')
 (resources/'Scripts').mkdir()
-for name in ('check-inactive.py', 'uninstall-local.sh', 'Uninstall ClairRoute.command'):
+for name in ('check-inactive.py', 'check-ready.py', 'install-local.sh', 'uninstall-local.sh', 'Uninstall ClairRoute.command'):
     shutil.copy2(root/'Scripts'/name, resources/'Scripts'/name)
 (staging/'Contents/PkgInfo').write_bytes(b'APPL????')
 if identity:
