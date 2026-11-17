@@ -245,7 +245,14 @@ final class SessionCoordinator: @unchecked Sendable {
                     guard let node = request.node, nodes.contains(node) else {
                         throw HelperFailure.refused("Delay checks are limited to nodes in this validated session.")
                     }
-                    delivery.send(InspectionReply(delayMilliseconds: try core.delay(node: node)))
+                    do { delivery.send(InspectionReply(delayMilliseconds: try core.delay(node: node))) }
+                    catch {
+                        // A failed manual test may be the node automatic selection is using.
+                        if ConfigurationBuilder.autoSelectCandidates(desired.profile).contains(node) {
+                            core.recheckAutomaticGroup(reason: "a candidate failed a delay test")
+                        }
+                        throw error
+                    }
                 case .select:
                     guard let node = request.node, nodes.contains(node) else {
                         throw HelperFailure.refused("Node selection is limited to the PROXY group of this validated session.")
@@ -423,11 +430,27 @@ final class SessionCoordinator: @unchecked Sendable {
     }
 
     private func setActive(_ request: ApplyRequest, message: String) {
+        scheduleAutomaticRecheck(for: request)
         DiagnosticLog.event("Active (TUN \(request.tunEnabled ? "on" : "off"), system proxy \(request.systemProxyEnabled ? "on" : "off"), core PID \(core.pid.map(String.init) ?? "none")): " + message)
         status = ServiceStatus(phase: .active, tunEnabled: request.tunEnabled,
             systemProxyEnabled: request.systemProxyEnabled, coreRunning: core.running,
             corePID: core.pid, generation: request.generation, message: message,
             coreVersion: AppConstants.coreVersion, recoveryPending: false)
+    }
+
+    /// After any (re)load the url-test group starts without history. If its first check runs while
+    /// the network is still settling, every candidate fails and the group keeps the first one, even a
+    /// dead one, for a whole interval. Re-test twice shortly afterwards so it can move on.
+    private func scheduleAutomaticRecheck(for request: ApplyRequest) {
+        guard !ConfigurationBuilder.autoSelectCandidates(request.profile).isEmpty else { return }
+        for delay in [5.0, 20.0] {
+            worker.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, let desired = self.desired, desired.sessionID == request.sessionID,
+                      desired.generation == request.generation, self.status.phase == .active, !self.sleeping,
+                      !ConfigurationBuilder.autoSelectCandidates(desired.profile).isEmpty else { return }
+                self.core.recheckAutomaticGroup(reason: "\(Int(delay)) s after activation")
+            }
+        }
     }
 
     private func checkLease() {

@@ -211,6 +211,17 @@ final class CoreSupervisor {
         return try controller.proxies(allowedNames: allowedNames)
     }
 
+    /// Asks the automatic group to re-test its candidates; failures are only logged.
+    func recheckAutomaticGroup(reason: String) {
+        guard running else { return }
+        do {
+            try controller.checkGroup(ConfigurationBuilder.autoPolicy, url: ConfigurationBuilder.autoSelectTestURL)
+            DiagnosticLog.event("Automatic selection re-tested (\(reason)).")
+        } catch {
+            DiagnosticLog.event("Automatic selection re-test (\(reason)) failed: " + ((error as? CoreControllerError)?.localizedDescription ?? "unknown error"))
+        }
+    }
+
     func delay(node: String) throws -> Int {
         guard running else { throw HelperFailure.refused("The core is not running.") }
         do { return try controller.delay(node: node) }
