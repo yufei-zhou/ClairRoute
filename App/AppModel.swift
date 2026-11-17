@@ -272,6 +272,11 @@ extension UserDefaults: AppPreferenceStorage {}
         let proxy = groups.first(where: { $0.name == "PROXY" })?.selected
         autoSelectedNode = proxy == ConfigurationBuilder.autoPolicy
             ? groups.first(where: { $0.name == ConfigurationBuilder.autoPolicy })?.selected : nil
+        // Show the core's own measurements for the candidates; a running manual test keeps its label.
+        for name in library.autoSelectCandidates where delays[name] != "测量中" {
+            guard let snapshot = groups.first(where: { $0.name == name }), let delay = snapshot.delay else { continue }
+            delays[name] = snapshot.alive == false || delay == 0 ? "不可用" : "\(delay) ms"
+        }
     }
     func refreshStatus() async {
         guard !busy else { return }

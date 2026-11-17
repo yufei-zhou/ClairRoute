@@ -127,9 +127,14 @@ public final class CoreController: Sendable {
             guard let value = proxies[name] else { return nil }
             let selected = value["now"] as? String
             let members = (value["all"] as? [String] ?? []).filter { allowedNames.contains($0) }
+            // Health checks record per test URL; fall back to the general history.
+            let tested = (value["extra"] as? [String: Any])?[ConfigurationBuilder.autoSelectTestURL] as? [String: Any]
+            let history = (tested?["history"] as? [[String: Any]]) ?? (value["history"] as? [[String: Any]]) ?? []
+            let delay = history.last.flatMap { Self.integer($0["delay"]) }.flatMap { (0...60_000).contains($0) ? $0 : nil }
             return ProxySnapshot(name: name, type: Self.text(value["type"], maximum: 64),
                 selected: selected.flatMap { allowedNames.contains($0) ? $0 : nil },
-                members: Array(members.prefix(512)), alive: value["alive"] as? Bool)
+                members: Array(members.prefix(512)), alive: (tested?["alive"] as? Bool) ?? value["alive"] as? Bool,
+                delay: delay)
         }
     }
 

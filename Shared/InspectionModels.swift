@@ -22,6 +22,8 @@ public struct ProxySnapshot: Codable, Identifiable, Sendable {
     public let selected: String?
     public let members: [String]
     public let alive: Bool?
+    /// Last delay the core measured for the automatic-selection test URL; 0 means it failed.
+    public var delay: Int? = nil
 }
 
 public enum InspectionOperation: String, Codable, Sendable {

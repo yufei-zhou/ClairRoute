@@ -81,7 +81,8 @@ private actor RefreshResults: SubscriptionFetching {
     }
     func heartbeat(sessionID: UUID) async throws -> ServiceStatus { heartbeats += 1; return current }
     func connections() async throws -> [ConnectionSnapshot] { inspections += 1; return [] }
-    func proxies() async throws -> [ProxySnapshot] { inspections += 1; return [] }
+    var proxySnapshots: [ProxySnapshot] = []
+    func proxies() async throws -> [ProxySnapshot] { inspections += 1; return proxySnapshots }
     private var delayInFlight = false
     func delay(node: String) async throws -> Int {
         // Mirrors HelperClient: a second concurrent test is rejected.
@@ -276,6 +277,17 @@ private actor RefreshResults: SubscriptionFetching {
     _ = await (first, second)
     try check(delays.model.delays["Node A"] == "42 ms" && delays.model.delays["Node B"] == "42 ms"
               && delays.model.error == nil, "rapid delay clicks are queued instead of reported as unavailable")
+
+    let measured = try ModelFixture(directory: directory.appendingPathComponent("core-delays"))
+    await measured.markRunning()
+    measured.helper.proxySnapshots = [
+        ProxySnapshot(name: "PROXY", type: "Selector", selected: ConfigurationBuilder.autoPolicy, members: [], alive: true),
+        ProxySnapshot(name: ConfigurationBuilder.autoPolicy, type: "URLTest", selected: "Node B", members: ["Node A", "Node B"], alive: true),
+        ProxySnapshot(name: "Node A", type: "Selector", selected: nil, members: [], alive: false, delay: 0),
+        ProxySnapshot(name: "Node B", type: "Selector", selected: nil, members: [], alive: true, delay: 87)]
+    await measured.model.setAutoSelect(AutoSelectSettings(enabled: true, candidateCount: 2))
+    try check(measured.model.autoSelectedNode == "Node B" && measured.model.delays["Node A"] == "不可用"
+              && measured.model.delays["Node B"] == "87 ms", "the core's own candidate measurements appear in the node list")
 
     let direct = try ModelFixture(directory: directory.appendingPathComponent("direct-selection"))
     await direct.markRunning()
