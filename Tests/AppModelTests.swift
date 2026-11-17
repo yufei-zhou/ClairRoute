@@ -83,6 +83,12 @@ private actor RefreshResults: SubscriptionFetching {
     func connections() async throws -> [ConnectionSnapshot] { inspections += 1; return [] }
     func proxies() async throws -> [ProxySnapshot] { inspections += 1; return [] }
     func delay(node: String) async throws -> Int { inspections += 1; return 42 }
+    var selections: [String] = []
+    var failSelect = false
+    func select(node: String) async throws -> ServiceStatus {
+        if failSelect { throw ClientError.rejected("Mock selection failure") }
+        selections.append(node); return current
+    }
 }
 
 @MainActor private struct ModelFixture {
@@ -254,6 +260,18 @@ private actor RefreshResults: SubscriptionFetching {
               "manual selection from automatic mode applies the complete updated profile")
     try check(try selection.disk().selectedNode == "Node B" && !selection.disk().autoSelect.enabled,
               "manual selection and automatic setting persist together")
+
+    let direct = try ModelFixture(directory: directory.appendingPathComponent("direct-selection"))
+    await direct.markRunning()
+    await direct.model.chooseNode("Node B")
+    try check(direct.helper.selections == ["Node B"] && direct.helper.applied.isEmpty
+              && (try direct.disk().selectedNode) == "Node B" && direct.model.error == nil,
+              "a manual switch within the same source selects PROXY directly without reloading")
+    let fallback = try ModelFixture(directory: directory.appendingPathComponent("direct-fallback"))
+    await fallback.markRunning(); fallback.helper.failSelect = true
+    await fallback.model.chooseNode("Node B")
+    try check(fallback.helper.applied.count == 1 && fallback.helper.applied[0].profile.selectedNode == "Node B"
+              && fallback.model.error == nil, "a failed direct switch falls back to a full apply")
 
     let saveFailure = try ModelFixture(directory: directory.appendingPathComponent("save-failure"), automatic: true)
     await saveFailure.markRunning()
