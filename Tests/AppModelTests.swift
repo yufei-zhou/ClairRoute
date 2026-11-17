@@ -82,7 +82,15 @@ private actor RefreshResults: SubscriptionFetching {
     func heartbeat(sessionID: UUID) async throws -> ServiceStatus { heartbeats += 1; return current }
     func connections() async throws -> [ConnectionSnapshot] { inspections += 1; return [] }
     func proxies() async throws -> [ProxySnapshot] { inspections += 1; return [] }
-    func delay(node: String) async throws -> Int { inspections += 1; return 42 }
+    private var delayInFlight = false
+    func delay(node: String) async throws -> Int {
+        // Mirrors HelperClient: a second concurrent test is rejected.
+        guard !delayInFlight else { throw ClientError.rejected("concurrent delay test") }
+        delayInFlight = true; defer { delayInFlight = false }
+        inspections += 1
+        try await Task.sleep(for: .milliseconds(20))
+        return 42
+    }
     var selections: [String] = []
     var failSelect = false
     func select(node: String) async throws -> ServiceStatus {
@@ -260,6 +268,14 @@ private actor RefreshResults: SubscriptionFetching {
               "manual selection from automatic mode applies the complete updated profile")
     try check(try selection.disk().selectedNode == "Node B" && !selection.disk().autoSelect.enabled,
               "manual selection and automatic setting persist together")
+
+    let delays = try ModelFixture(directory: directory.appendingPathComponent("queued-delays"))
+    await delays.markRunning()
+    async let first: Void = delays.model.measureDelay("Node A")
+    async let second: Void = delays.model.measureDelay("Node B")
+    _ = await (first, second)
+    try check(delays.model.delays["Node A"] == "42 ms" && delays.model.delays["Node B"] == "42 ms"
+              && delays.model.error == nil, "rapid delay clicks are queued instead of reported as unavailable")
 
     let direct = try ModelFixture(directory: directory.appendingPathComponent("direct-selection"))
     await direct.markRunning()
