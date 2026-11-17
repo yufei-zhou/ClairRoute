@@ -133,6 +133,17 @@ public final class CoreController: Sendable {
         }
     }
 
+    /// Re-tests every member of a url-test group now, so it can leave a dead node without
+    /// waiting for its interval. The answer lists only reachable members; it is not needed.
+    public func checkGroup(_ group: String, url: String) throws {
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard let encodedURL = url.addingPercentEncoding(withAllowedCharacters: allowed) else {
+            throw CoreControllerError.invalidConfiguration
+        }
+        let path = "/group/" + (try Self.proxyPath(group)).dropFirst("/proxies/".count) + "/delay?url=" + encodedURL + "&timeout=5000"
+        _ = try request(method: "GET", path: String(path), timeout: 7)
+    }
+
     public func delay(node: String) throws -> Int {
         let path = try Self.proxyPath(node) + "/delay?url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=5000"
         let bytes: Data
