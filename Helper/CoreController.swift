@@ -16,6 +16,7 @@ public struct CoreSnapshot: Sendable {
 public enum CoreControllerError: LocalizedError, Sendable {
     case unavailable, timedOut, unsafeSocket, malformedResponse, responseTooLarge
     case rejected(Int)
+    case delayFailed(Int)
     case invalidConfiguration, unexpectedVersion
 
     public var errorDescription: String? {
@@ -26,6 +27,9 @@ public enum CoreControllerError: LocalizedError, Sendable {
         case .malformedResponse: return "内核控制器返回了无效响应。"
         case .responseTooLarge: return "内核控制器响应超过安全大小限制。"
         case .rejected(let code): return "内核拒绝了配置请求（HTTP \(code)）；响应正文已隐藏以保护凭据。"
+        case .delayFailed(let code): return code == 504 || code == 408
+            ? "测速超时：5 秒内没能经这个节点连上测试地址。"
+            : "测速失败：内核返回 HTTP \(code)。"
         case .invalidConfiguration: return "无法编码内存中的内核配置。"
         case .unexpectedVersion: return "正在运行的内核版本与固定版本不一致。"
         }
@@ -131,7 +135,9 @@ public final class CoreController: Sendable {
 
     public func delay(node: String) throws -> Int {
         let path = try Self.proxyPath(node) + "/delay?url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=5000"
-        let bytes = try request(method: "GET", path: path, timeout: 6)
+        let bytes: Data
+        do { bytes = try request(method: "GET", path: path, timeout: 6) }
+        catch CoreControllerError.rejected(let code) { throw CoreControllerError.delayFailed(code) }
         guard let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               let delay = Self.integer(object["delay"]), (0...60_000).contains(delay) else {
             throw CoreControllerError.malformedResponse

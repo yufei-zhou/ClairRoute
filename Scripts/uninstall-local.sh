@@ -174,6 +174,7 @@ if [[ -e "$GUARD_DAEMON" ]]; then
 fi
 # Both daemons are stopped and all recovery journals are clean/absent. Only our fixed tree is removed.
 rm -rf "$SUPPORT"
+rm -rf '/Library/Logs/ClairRoute'
 COMMITTED=1
 echo 'Removed ClairRoute app, local LaunchDaemon, Helper/core and application data.'
 echo 'The reusable local signing certificate is retained in Keychain intentionally.'
