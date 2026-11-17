@@ -21,6 +21,7 @@ private final class PreviewVault: SecretVault {
     func connections() async throws -> [ConnectionSnapshot] { [] }
     func proxies() async throws -> [ProxySnapshot] { [] }
     func delay(node: String) async throws -> Int { throw ClientError.unsignedBuild }
+    func select(node: String) async throws -> ServiceStatus { throw ClientError.unsignedBuild }
 }
 private actor PreviewSubscriptions: SubscriptionFetching {
     private var calls = 0

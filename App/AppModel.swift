@@ -354,12 +354,25 @@ extension UserDefaults: AppPreferenceStorage {}
         do { try library.selectNode(name) }
         catch { self.error = error.localizedDescription; return }
         autoSelectedNode = nil
-        // Rebuild dependent subscription groups and remove the old automatic probe group.
-        if status.coreRunning, !(await applyWhileBusy(tun: status.tunEnabled, proxy: status.systemProxyEnabled)) {
-            await restoreSavedSelection(node: previous, autoSelect: previousAuto)
-            return
+        if status.coreRunning {
+            // Within one subscription the running groups already follow PROXY, so switching PROXY
+            // directly keeps connections and leaves unapplied rule edits alone.
+            var switched = false
+            if !wasAutomatic, let previous, sourceID(of: previous) == sourceID(of: name) {
+                do { accept(try await client.select(node: name)); switched = true }
+                catch { switched = false }
+            }
+            // Otherwise rebuild dependent subscription groups and remove the old automatic probe group.
+            if !switched, !(await applyWhileBusy(tun: status.tunEnabled, proxy: status.systemProxyEnabled)) {
+                await restoreSavedSelection(node: previous, autoSelect: previousAuto)
+                return
+            }
         }
         error = nil; notice = wasAutomatic ? "已改为手动选择节点：\(name)" : "已选择节点：\(name)"
+    }
+    /// The subscription a node comes from; nil for local nodes. Unknown names never match.
+    private func sourceID(of name: String) -> UUID?? {
+        library.nodes.first(where: { $0.name == name }).map(\.sourceID)
     }
     /// Saves automatic selection and, while proxying, reloads the core so it takes effect now.
     func setAutoSelect(_ settings: AutoSelectSettings) async {

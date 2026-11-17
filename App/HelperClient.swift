@@ -42,6 +42,7 @@ private final class ReplyGate: @unchecked Sendable {
     func connections() async throws -> [ConnectionSnapshot]
     func proxies() async throws -> [ProxySnapshot]
     func delay(node: String) async throws -> Int
+    func select(node: String) async throws -> ServiceStatus
 }
 
 @MainActor final class HelperClient: HelperControlling {
