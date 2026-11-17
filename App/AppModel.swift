@@ -408,11 +408,20 @@ extension UserDefaults: AppPreferenceStorage {}
                 : "配置应用失败，原节点设置也未能写回，网络恢复状态未确认。请重试「恢复网络并关闭代理」。"
         }
     }
+    /// The Helper runs one delay test at a time; later clicks wait their turn instead of failing.
+    private var delayQueue: Task<Void, Never>?
     func measureDelay(_ name: String) async {
         guard status.coreRunning else { error = "延迟测试需要先启用内核；不会为测试自动接管网络。"; return }
         delays[name] = "测量中"
-        do { delays[name] = "\(try await client.delay(node: name)) ms" }
-        catch { delays[name] = "不可用"; self.error = error.localizedDescription }
+        let previous = delayQueue
+        let test = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            do { self.delays[name] = "\(try await self.client.delay(node: name)) ms" }
+            catch { self.delays[name] = "不可用"; self.error = error.localizedDescription }
+        }
+        delayQueue = test
+        await test.value
     }
     func addRule(_ rule: RoutingRule) {
         do { try library.persistRules(library.rules + [rule]); selectedPage = .rules; notice = "规则已保存；点击「应用配置」生效。"; error = nil }
