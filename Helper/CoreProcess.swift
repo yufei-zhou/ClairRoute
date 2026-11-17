@@ -127,11 +127,22 @@ final class CoreProcess {
         guard posix_spawnattr_setflags(&attributes, Int16(flags)) == 0,
               posix_spawnattr_setsigmask(&attributes, &empty) == 0,
               posix_spawnattr_setsigdefault(&attributes, &defaults) == 0,
-              posix_spawn_file_actions_adddup2(&actions, descriptors[0], STDIN_FILENO) == 0,
-              posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0,
-              posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0 else {
+              posix_spawn_file_actions_adddup2(&actions, descriptors[0], STDIN_FILENO) == 0 else {
             throw HelperFailure.refused("Cannot prepare core process isolation.")
         }
+        // A running core logs to /Library/Logs/ClairRoute/core.log. The `-t` validation run may echo
+        // parts of the configuration in errors, so its output is always discarded.
+        let logFile = validation ? nil : DiagnosticLog.openFile(DiagnosticLog.coreFile)
+        defer { if let logFile { close(logFile) } }
+        let outputReady: Bool
+        if let logFile {
+            outputReady = posix_spawn_file_actions_adddup2(&actions, logFile, STDOUT_FILENO) == 0 &&
+                posix_spawn_file_actions_adddup2(&actions, logFile, STDERR_FILENO) == 0
+        } else {
+            outputReady = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0 &&
+                posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0
+        }
+        guard outputReady else { throw HelperFailure.refused("Cannot prepare core process isolation.") }
         let arguments = [HelperSecurity.binary.path] + (validation ? ["-t"] : []) + ["-d", HelperSecurity.state.path, "-f", "-"]
         let environment = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + HelperSecurity.state.path]
         var child: pid_t = 0

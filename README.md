@@ -108,6 +108,9 @@ sudo launchctl kickstart -k system/local.nano.ClairRoute.Helper
 
 如果系统暂时拒绝恢复 DNS 或代理设置，Helper 会保留仍被这些设置使用的内核，并独立于界面继续重试，重试间隔逐步增加至 30 秒。恢复记录保留期间禁止开启新会话；系统 API 持续失败时，不能保证恢复完成。
 
+**出问题时去哪里看日志？**
+后台服务把事件（网络切换、睡眠唤醒、恢复网络、测速失败等）写在 `/Library/Logs/ClairRoute/helper.log`，mihomo 内核的运行日志写在 `/Library/Logs/ClairRoute/core.log`。管理员账户不需要 sudo 就能读，也可以用“控制台”App 打开。每个文件超过 4 MB 时会轮换成 `.1`。日志里有访问的域名和节点地址，但不含密码、UUID 或订阅地址。想看更详细的内核日志，可在高级设置里把 `log-level` 改成 `info`。
+
 **我的密码和订阅地址存在哪里？**
 存放在 `~/Library/Application Support/ClairRoute/profile.json`，是**明文**，文件权限 `0600`（只有你的账户能读）。能以你的身份运行的程序仍然可以读到它，所以不要把这个文件提交到代码仓库、贴到日志或发给别人。订阅由界面进程直接下载并在本机解析，root 权限的内核看不到订阅地址。
 

@@ -213,7 +213,12 @@ final class CoreSupervisor {
 
     func delay(node: String) throws -> Int {
         guard running else { throw HelperFailure.refused("The core is not running.") }
-        return try controller.delay(node: node)
+        do { return try controller.delay(node: node) }
+        catch {
+            // Node names are user data but not secrets; they make a timeout traceable in core.log.
+            DiagnosticLog.event("Delay test for \"\(node)\" failed: " + ((error as? CoreControllerError)?.localizedDescription ?? "unknown error"))
+            throw error
+        }
     }
 
     func select(node: String, allowedNames: Set<String>) throws {

@@ -318,6 +318,7 @@ final class SessionCoordinator: @unchecked Sendable {
     }
 
     private func restore(reason: String) -> String? {
+        if desired != nil || core.running { DiagnosticLog.event("Restoring network: " + reason) }
         // Restoration has its own lifetime. Detach the GUI and cancel active
         // reconciliation even if the safety lock cannot currently be acquired.
         // Neither a late heartbeat nor a wake event may re-enable this session.
@@ -422,6 +423,7 @@ final class SessionCoordinator: @unchecked Sendable {
     }
 
     private func setActive(_ request: ApplyRequest, message: String) {
+        DiagnosticLog.event("Active (TUN \(request.tunEnabled ? "on" : "off"), system proxy \(request.systemProxyEnabled ? "on" : "off"), core PID \(core.pid.map(String.init) ?? "none")): " + message)
         status = ServiceStatus(phase: .active, tunEnabled: request.tunEnabled,
             systemProxyEnabled: request.systemProxyEnabled, coreRunning: core.running,
             corePID: core.pid, generation: request.generation, message: message,
@@ -470,7 +472,10 @@ final class SessionCoordinator: @unchecked Sendable {
     }
 
     private func networkDidChange() {
-        worker.async { [self] in scheduleReconciliation() }
+        worker.async { [self] in
+            if desired != nil { DiagnosticLog.event("Network change observed; reconciling the active session.") }
+            scheduleReconciliation()
+        }
     }
 
     private func scheduleReconciliation() {
@@ -505,8 +510,10 @@ final class SessionCoordinator: @unchecked Sendable {
             try core.ensureHealthy(tunEnabled: request.tunEnabled, mode: request.profile.mode)
             reconciliationAttempts = 0
             setActive(request, message: "Proxy state was reconciled after a network or wake event.")
+            DiagnosticLog.event("Reconciled: core reloaded and healthy.")
         } catch {
             reconciliationAttempts += 1
+            DiagnosticLog.event("Reconciliation attempt \(reconciliationAttempts) failed: " + safeMessage(error))
             if reconciliationAttempts < 2 {
                 status.phase = .reconfiguring
                 status.message = safeMessage(error) + " A bounded recovery retry is pending."
@@ -521,10 +528,12 @@ final class SessionCoordinator: @unchecked Sendable {
         worker.async { [self] in
             switch event {
             case .willSleep:
+                DiagnosticLog.event("System will sleep.")
                 sleeping = true
                 networkWork?.cancel()
                 cancelRestorationRetry()
             case .didWake:
+                DiagnosticLog.event("System did wake.")
                 sleeping = false
                 wakeGraceUntil = ProcessInfo.processInfo.systemUptime + 30
                 lastHeartbeat = ProcessInfo.processInfo.systemUptime
