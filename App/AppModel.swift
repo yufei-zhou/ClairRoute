@@ -122,6 +122,9 @@ extension UserDefaults: AppPreferenceStorage {}
         // Do not resurrect a historical opt-in when upgrading from manual-only builds.
         preferences.set(false, forKey: "ClairRoute.autoConnect")
         libraryObservation = library.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        library.onEndpointsChanged = { [weak self] id in
+            Task { @MainActor in await self?.applyRefreshedEndpoints(of: id) }
+        }
         // Successful import, editor and refresh results share the transient channel.
         libraryNoticeObservation = library.$notice.sink { [weak self] message in
             guard let self, let message, !message.isEmpty else { return }
@@ -266,6 +269,33 @@ extension UserDefaults: AppPreferenceStorage {}
         helperConnected = true; unconfirmed = false
         if !next.coreRunning { connections = []; activeTrialMode = false; autoSelectedNode = nil }
     }
+    /// A provider that rotates server addresses leaves the running core dialing dead ones. Once a
+    /// refresh changes the addresses of a subscription the session uses, apply the saved profile.
+    private func applyRefreshedEndpoints(of id: UUID) async {
+        guard status.coreRunning, library.subscriptions.contains(where: { $0.id == id && $0.enabled }) else { return }
+        for _ in 0..<10 where busy { try? await Task.sleep(for: .seconds(1)) }
+        guard status.coreRunning, !busy else { return }
+        if await apply(tun: status.tunEnabled, proxy: status.systemProxyEnabled) {
+            notice = "订阅里的节点地址有变化，已自动应用。"
+        }
+    }
+    private var lastSelfHeal: ContinuousClock.Instant?
+    /// Every automatic candidate failed its last check: the addresses may have rotated. Refresh
+    /// their subscription at most once per 10 minutes; a changed result is applied as above.
+    private func refreshIfAllCandidatesFailed(_ groups: [ProxySnapshot]) async {
+        let candidates = library.autoSelectCandidates
+        guard !candidates.isEmpty else { return }
+        let measured = candidates.compactMap { name in groups.first(where: { $0.name == name }) }
+        guard measured.count == candidates.count,
+              measured.allSatisfy({ $0.delay != nil && ($0.alive == false || $0.delay == 0) }) else { return }
+        let now = ContinuousClock.now
+        if let lastSelfHeal, now - lastSelfHeal < .seconds(600) { return }
+        guard let source = library.nodes.first(where: { $0.name == candidates[0] })?.sourceID,
+              library.subscriptions.contains(where: { $0.id == source && $0.enabled }) else { return }
+        lastSelfHeal = now
+        do { try await library.refreshSubscription(id: source) }
+        catch { if library.error == nil { self.error = error.localizedDescription } }
+    }
     /// Reads which candidate the core's url-test group picked. Failures only clear the display.
     private func refreshAutoSelection() async {
         guard let groups = try? await client.proxies() else { autoSelectedNode = nil; return }
@@ -277,6 +307,7 @@ extension UserDefaults: AppPreferenceStorage {}
             guard let snapshot = groups.first(where: { $0.name == name }), let delay = snapshot.delay else { continue }
             delays[name] = snapshot.alive == false || delay == 0 ? "不可用" : "\(delay) ms"
         }
+        await refreshIfAllCandidatesFailed(groups)
     }
     func refreshStatus() async {
         guard !busy else { return }

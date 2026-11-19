@@ -72,6 +72,7 @@ final class SessionCoordinator: @unchecked Sendable {
             timer.setEventHandler { [weak self] in
                 self?.checkLease()
                 self?.publishInstallationReadiness()
+                DiagnosticLog.rotateInPlace(DiagnosticLog.coreFile)
             }
             leaseTimer = timer
             timer.resume()

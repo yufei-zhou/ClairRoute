@@ -38,6 +38,33 @@ enum DiagnosticLog {
         return fd
     }
 
+    /// The running core keeps one append-only descriptor open, so its log cannot be renamed away.
+    /// Once it is too large, copy it to `name.1` and truncate it in place; appends continue at 0.
+    static func rotateInPlace(_ name: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard let dir = openDirectory() else { return }
+        defer { close(dir) }
+        var info = stat()
+        guard fstatat(dir, name, &info, AT_SYMLINK_NOFOLLOW) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_uid == 0, info.st_size > maximumBytes else { return }
+        let source = openat(dir, name, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
+        guard source >= 0 else { return }
+        defer { close(source) }
+        _ = unlinkat(dir, name + ".1", 0)
+        let copy = openat(dir, name + ".1", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o640)
+        if copy >= 0 {
+            _ = fchown(copy, 0, adminGroup)
+            var buffer = [UInt8](repeating: 0, count: 65_536)
+            while true {
+                let count = buffer.withUnsafeMutableBytes { read(source, $0.baseAddress, $0.count) }
+                if count <= 0 { break }
+                _ = buffer.withUnsafeBytes { write(copy, $0.baseAddress, count) }
+            }
+            close(copy)
+        }
+        _ = ftruncate(source, 0)
+    }
+
     /// Appends one timestamped line to helper.log.
     static func event(_ message: String) {
         lock.lock(); defer { lock.unlock() }
