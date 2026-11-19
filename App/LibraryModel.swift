@@ -41,6 +41,9 @@ final class AppLibraryModel: ObservableObject {
     }
     deinit { timer?.cancel() }
 
+    /// Called after a refresh changed this subscription's node names, order, servers or ports.
+    var onEndpointsChanged: ((UUID) -> Void)?
+
     func clearMessages() { error = nil; notice = nil; warnings = [] }
 
     func readNode(id: UUID) throws -> ProxyNode {
@@ -195,6 +198,10 @@ final class AppLibraryModel: ObservableObject {
             try commit(next, additions: additions, removing: removed)
             notice = "订阅已更新：\(parsed.nodes.count) 个节点。"
             warnings = parsed.warnings.map { next.subscriptions[currentIndex].name + "：" + $0 }
+            func endpoints(_ nodes: [NodeMetadata]) -> [String] {
+                nodes.map { "\($0.name)|\($0.type.rawValue)|\($0.server)|\($0.port)" }
+            }
+            if endpoints(previous) != endpoints(next.nodes.filter { $0.sourceID == id }) { onEndpointsChanged?(id) }
         } catch {
             self.error = safeError(error)
             throw error

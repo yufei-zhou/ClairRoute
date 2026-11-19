@@ -45,6 +45,23 @@ private actor RefreshResults: SubscriptionFetching {
     }
 }
 
+/// Serves the same two nodes; `server` decides their address, like a provider rotating IPs.
+private actor RotatingSubscription: SubscriptionFetching {
+    private(set) var calls = 0
+    var server = "198.51.100.1"
+    func rotate(to value: String) { server = value }
+    func fetch(_ url: URL) async throws -> SubscriptionDownload {
+        calls += 1
+        let yaml = """
+        proxies:
+          - {name: First, type: ss, server: \(server), port: 443, cipher: aes-256-gcm, password: fixture-only}
+          - {name: Second, type: ss, server: \(server), port: 8443, cipher: aes-256-gcm, password: fixture-only}
+
+        """
+        return SubscriptionDownload(data: Data(yaml.utf8), userInfo: nil)
+    }
+}
+
 @MainActor private final class RecordingHelper: HelperControlling {
     var onDisconnect: (() -> Void)?
     var current = ServiceStatus.idle
@@ -338,6 +355,41 @@ private actor RefreshResults: SubscriptionFetching {
         try check(failure.model.error?.contains(stopFails ? "未确认" : "代理已关闭") == true,
                   "rollback failure is never silently discarded")
     }
+    let rotating = RotatingSubscription()
+    let rotatingLibrary = AppLibraryModel(store: ProfileStore(directory: directory.appendingPathComponent("rotating"),
+                                                              vault: ForbiddenVault()),
+                                          service: rotating, automaticRefresh: false)
+    try rotatingLibrary.addSubscription(name: "Rotating", url: "https://example.test/rotating", interval: 86_400)
+    let rotatingID = rotatingLibrary.subscriptions[0].id
+    try await rotatingLibrary.refreshSubscription(id: rotatingID)
+    try rotatingLibrary.setAutoSelect(AutoSelectSettings(enabled: true, candidateCount: 2))
+    let rotatingHelper = RecordingHelper()
+    let rotatingModel = AppModel(library: rotatingLibrary, client: rotatingHelper, preferences: TestPreferences(), signed: true)
+    rotatingHelper.current = ServiceStatus(phase: .active, tunEnabled: true, coreRunning: true, generation: 1)
+    await rotatingModel.refreshStatus()
+    func settle() async { for _ in 0..<20 { await Task.yield() } }
+    try await rotatingLibrary.refreshSubscription(id: rotatingID); await settle()
+    try check(rotatingHelper.applied.isEmpty, "a refresh with unchanged addresses does not reload the running core")
+    await rotating.rotate(to: "198.51.100.2")
+    try await rotatingLibrary.refreshSubscription(id: rotatingID); await settle()
+    try check(rotatingHelper.applied.count == 1
+              && rotatingHelper.applied[0].profile.nodes.allSatisfy { $0.server == "198.51.100.2" },
+              "rotated subscription addresses are applied to the running session once")
+    // Every candidate failed its last automatic check: refresh once, not again within 10 minutes.
+    rotatingHelper.proxySnapshots = [
+        ProxySnapshot(name: "PROXY", type: "Selector", selected: ConfigurationBuilder.autoPolicy, members: [], alive: true),
+        ProxySnapshot(name: "First", type: "Selector", selected: nil, members: [], alive: false, delay: 0),
+        ProxySnapshot(name: "Second", type: "Selector", selected: nil, members: [], alive: false, delay: 0)]
+    await rotating.rotate(to: "198.51.100.3")
+    let before = await rotating.calls
+    await rotatingModel.setAutoSelect(AutoSelectSettings(enabled: true, candidateCount: 3)); await settle()
+    let afterFirst = await rotating.calls
+    await rotatingModel.setAutoSelect(AutoSelectSettings(enabled: true, candidateCount: 2)); await settle()
+    let afterSecond = await rotating.calls
+    try check(afterFirst == before + 1 && afterSecond == afterFirst
+              && rotatingHelper.applied.last?.profile.nodes.allSatisfy({ $0.server == "198.51.100.3" }) == true,
+              "all candidates failing refreshes the subscription once and applies the new addresses")
+
     let refreshed = AppLibraryModel(store: ProfileStore(directory: directory.appendingPathComponent("refresh-messages"),
                                                         vault: ForbiddenVault()),
                                     service: RefreshResults(), automaticRefresh: false)
