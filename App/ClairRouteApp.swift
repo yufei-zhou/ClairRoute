@@ -20,6 +20,8 @@ private struct MainWindowContent: View {
                 // Retain the scene action so Spotlight can reopen a closed window.
                 delegate.openMainWindow = { [openWindow] in openWindow(id: "settings") }
                 model.startObserving()
+                // The window may appear after launch finished; a normal launch shows it in front.
+                if !delegate.launchedInBackground { delegate.bringWindowForward() }
             }
     }
 }
