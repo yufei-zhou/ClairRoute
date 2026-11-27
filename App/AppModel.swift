@@ -528,8 +528,19 @@ extension UserDefaults: AppPreferenceStorage {}
         model.startObserving()
         let event = NSAppleEventManager.shared().currentAppleEvent
         let loginLaunch = event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == keyAELaunchedAsLogInItem
-        if loginLaunch || ProcessInfo.processInfo.arguments.contains("--background") { NSApp.hide(nil) }
+        launchedInBackground = loginLaunch || ProcessInfo.processInfo.arguments.contains("--background")
+        if launchedInBackground { NSApp.hide(nil) }
+        else {
+            // An LSUIElement app is not activated when Spotlight launches it, so its new window
+            // would open behind the current app. Bring it forward once the scene has created it.
+            DispatchQueue.main.async { [weak self] in self?.bringWindowForward() }
+        }
         model.startLaunchConnection()
+    }
+    private(set) var launchedInBackground = false
+    func bringWindowForward() {
+        NSApp.activate()
+        NSApp.windows.first(where: { $0.canBecomeMain && $0.isVisible })?.makeKeyAndOrderFront(nil)
     }
     func applicationDidBecomeActive(_ notification: Notification) { model.refreshLoginStatus() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
